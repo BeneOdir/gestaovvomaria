@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>Vovó Maria - Treinamento Comercial</title>
+    <style>
+        * { 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
+        }
+        
+        body {
+            /* 🔵 Azul escuro - concentração profunda, reduz ansiedade */
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: #0f172a;
+            padding: 16px;
+            min-height: 100vh;
+        }
+        
+        .container { 
+            max-width: 800px; 
+            margin: 0 auto; 
+        }
+        
+        /* 🟠 Laranja - motivação, energia para o header */
+        .header {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+        
+        .badge {
+            background: #f97316;
+            border-radius: 50px;
+            padding: 6px 20px;
+            display: inline-block;
+            margin-bottom: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .badge span { 
+            color: white; 
+            font-weight: bold; 
+            font-size: 14px;
+        }
+        
+        /* 🟡 Amarelo para títulos - atenção e otimismo */
+        h1 { 
+            font-size: clamp(22px, 6vw, 28px); 
+            font-weight: bold; 
+            color: #fef08a;
+            margin-bottom: 4px;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+        }
+        
+        .subtitle { 
+            color: #94a3b8; 
+            font-size: 14px;
+        }
+        
+        /* 🟢 Verde para progresso - segurança e conquista */
+        .progress-container {
+            margin-top: 16px;
+            background: #1e293b;
+            padding: 12px;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        }
+        
+        .progress-bar {
+            background: #334155;
+            border-radius: 10px;
+            height: 8px;
+        }
+        
+        .progress-fill {
+            background: #10b981;
+            height: 8px;
+            border-radius: 10px;
+            width: 0%;
+            transition: width 0.3s;
+            box-shadow: 0 0 8px rgba(16,185,129,0.5);
+        }
+        
+        .progress-text { 
+            font-size: 12px; 
+            margin-top: 8px; 
+            color: #94a3b8;
+            font-weight: 500;
+        }
+        
+        /* 🟠 Laranja para streak - motivação diária */
+        .streak-card {
+            background: linear-gradient(135deg, #1e293b, #334155);
+            border-radius: 12px;
+            padding: 12px;
+            margin: 16px 0;
+            text-align: center;
+            border: 1px solid #f97316;
+            box-shadow: 0 0 12px rgba(249,115,22,0.2);
+        }
+        
+        .streak-card div:first-child {
+            color: #94a3b8;
+            font-size: 12px;
+        }
+        
+        .streak-number {
+            font-size: 28px;
+            font-weight: bold;
+            color: #f97316;
+        }
+        
+        /* 🧠 Timer com laranja para energia */
+        .timer-card {
+            background: #1e293b;
+            border-radius: 16px;
+            padding: 16px;
+            margin-bottom: 20px;
+            text-align: center;
+            border: 2px solid #f97316;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        
+        .timer-display {
+            font-size: clamp(40px, 12vw, 56px);
+            font-weight: bold;
+            font-family: 'Courier New', monospace;
+            color: #f97316;
+            text-shadow: 0 0 8px rgba(249,115,22,0.3);
+        }
+        
+        .timer-label {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-top: 4px;
+        }
+        
+        /* 🟣 Roxo para cards ativos - memória de longo prazo */
+        .card {
+            background: white;
+            border-radius: 16px;
+            padding: 18px;
+            margin-bottom: 16px;
+            border-left: 4px solid #cbd5e1;
+            transition: all 0.2s;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .card.completed { 
+            border-left: 4px solid #10b981;
+            background: #f0fdf4;
+        }
+        
+        .card.pending {
+            border-left: 4px solid #f59e0b;
+            background: #fffbeb;
+        }
+        
+        .card.available {
+            border-left: 4px solid #6366f1;
+        }
+        
+        .card.locked {
+            opacity: 0.6;
+            background: #f1f5f9;
+            border-left: 4px solid #94a3b8;
+        }
+        
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        
+        .day-badge {
+            background: #6366f1;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 50px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .status-badge {
+            font-size: 20px;
+        }
+        
+        /* 🟣 Roxo para citações - fixação na memória */
+        .quote {
+            background: #e0e7ff;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            border-left: 3px solid #6366f1;
+        }
+        
+        .quote p { 
+            margin: 0; 
+            font-style: italic; 
+            color: #1e1b4b; 
+            font-size: 14px;
+        }
+        
+        .card-title { 
+            font-size: 17px; 
+            font-weight: bold; 
+            color: #0f172a; 
+            margin-bottom: 8px;
+        }
+        
+        .content {
+            white-space: pre-line;
+            color: #334155;
+            font-size: 14px;
+            line-height: 1.5;
+            margin-bottom: 12px;
+        }
+        
+        /* 🟢 Verde para missões - segurança */
+        .mission {
+            background: #ecfdf5;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            font-size: 14px;
+            border-left: 3px solid #10b981;
+        }
+        
+        .mission strong { 
+            color: #059669; 
+        }
+        
+        /* 🟡 Amarelo para dicas - atenção especial */
+        .tip {
+            background: #fefce8;
+            padding: 8px 12px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            font-size: 13px;
+            border-left: 3px solid #eab308;
+        }
+        
+        .tip strong { 
+            color: #ca8a04; 
+        }
+        
+        /* 🟠 Botões com laranja para ação */
+        .button-group { 
+            display: flex; 
+            gap: 10px; 
+        }
+        
+        .btn {
+            flex: 1;
+            border: none;
+            border-radius: 50px;
+            padding: 10px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.1s, opacity 0.2s;
+            font-size: 13px;
+        }
+        
+        .btn:active { 
+            transform: scale(0.97); 
+        }
+        
+        .btn-primary {
+            background: #f97316;
+            color: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .btn-primary:disabled {
+            background: #64748b;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+        
+        .btn-outline {
+            background: white;
+            border: 2px solid #f97316;
+            color: #f97316;
+        }
+        
+        /* Rodapé */
+        .footer {
+            text-align: center;
+            margin-top: 24px;
+            padding-top: 20px;
+            border-top: 1px solid #334155;
+            font-size: 12px;
+            color: #64748b;
+        }
+        
+        .footer strong {
+            color: #f97316;
+        }
+        
+        /* Mensagens toast */
+        .message-toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1e293b;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 50px;
+            font-size: 14px;
+            z-index: 1000;
+            animation: fadeInUp 0.3s ease;
+            white-space: nowrap;
+            border-left: 4px solid #f97316;
+        }
+        
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateX(-50%) translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(-50%) translateY(0);
+            }
+        }
+        
+        /* Responsividade */
+        @media (max-width: 480px) {
+            body { padding: 12px; }
+            .card { padding: 14px; }
+            .button-group { flex-direction: column; }
+            .btn { padding: 10px; }
+            .message-toast { 
+                font-size: 12px; 
+                white-space: normal; 
+                max-width: 90%; 
+                text-align: center; 
+            }
+        }
+        
+        /* Animação de celebração */
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container" id="app"></div>
+
+    <script>
+        // ============================================
+        // MÓDULOS DE TREINAMENTO (31 dias completos)
+        // ============================================
+        const modules = [
+            { dia: 1, titulo: "🌸 Nossa História", frase: "Feito como vovó Maria fazia.", conteudo: "A Vovó Maria nasceu de uma lembrança... Em 2009, transformamos tradição em empresa. 15 anos depois, mesmo propósito.", missao: "Grave um áudio de 1 minuto contando a história da Vovó Maria.", dica: "Você não precisa decorar. Precisa sentir. A história vende sozinha." },
+            { dia: 2, titulo: "👥 Quem Somos", frase: "Não vendemos apenas biscoitos. Entregamos tradição.", conteudo: "Somos uma fábrica de biscoito de polvilho assado, natural, sem conservante. 15 anos de mercado.", missao: "Observe 3 concorrentes. Anote o que você faria diferente.", dica: "Concorrente não é inimigo. É contexto. Aprenda com ele." },
+            { dia: 3, titulo: "📦 Nossos Produtos", frase: "Conhecer o produto gera confiança.", conteudo: "PETA (tradicional), Peta Palito 100g (carro-chefe), 180g e 500g. Peta Temperada e Biscoitos 90g.", missao: "Apresente um diferencial do produto para um cliente hoje.", dica: "Carro-chefe: Peta Palito 100g. Comece por ele." },
+            { dia: 4, titulo: "🚀 O Novo Vendedor", frase: "Vendedor moderno expande mercado.", conteudo: "Prospecte ativamente. Observe gôndola, pergunte giro, sugira reposição. Mostre oportunidade.", missao: "Faça uma abordagem profissional usando o roteiro.", dica: "Você não pede permissão. Oferece valor." },
+            { dia: 5, titulo: "🧠 Como o Mercado Pensa", frase: "Mercado compra SEGURANÇA e GIRO.", conteudo: "Dono quer margem (45-50%), giro rápido e fornecedor confiável.", missao: "Faça as 3 perguntas para um cliente. Anote respostas.", dica: "Perguntar não é fraqueza. É inteligência comercial." },
+            { dia: 6, titulo: "💬 Abordagem Pequeno", frase: "Chegou, falou, convenceu.", conteudo: "Roteiro: 'Bom dia, vim mostrar biscoito assado que já vende na região. Posso deixar amostra?'", missao: "Fale o roteiro 5 vezes em voz alta.", dica: "Tom educado, mas seguro. Não está pedindo favor." },
+            { dia: 7, titulo: "🏢 Abordagem Rede Grande", frase: "Profissional, direto, sem enrolação.", conteudo: "Roteiro: 'Seu setor tem produto natural? Tenho assado com 50% de margem.'", missao: "Simule uma abordagem para rede grande.", dica: "Postura de consultor, não de pedinte." },
+            { dia: 8, titulo: "💰 Objeção: Está Caro", frase: "Objeção não é rejeição. É insegurança.", conteudo: "🔍 O que ele quer dizer: Medo de não vender / Só compara preço.\n💡 Pergunte: 'Comparado a qual produto?'\n🎯 Resposta: 'Entendo. O que mais preocupa: o investimento ou o risco?'", missao: "Responda um cliente com essa abordagem.", dica: "Você explica seu processo e tira o risco." },
+            { dia: 9, titulo: "📐 Objeção: Não tenho espaço", frase: "Espaço sempre tem.", conteudo: "🔍 O que ele quer dizer: Não conhece o produto / Não quer risco.\n💡 Pergunte: 'Se encontrasse um produto com mais giro, abriria espaço?'\n🎯 Resposta: 'Podemos começar pequeno e acompanhar juntos.'", missao: "Ofereça solução para cliente que reclama de espaço.", dica: "Você não pede permissão. Oferece solução prática." },
+            { dia: 10, titulo: "🤝 Objeção: Já tenho fornecedor", frase: "Não é sobre substituir. É sobre somar.", conteudo: "🔍 O que ele quer dizer: Não vê motivo para mudar.\n💡 Pergunte: 'O que mais valoriza no seu fornecedor?'\n🎯 Resposta: 'Excelente. Quero oferecer mais uma opção para seus clientes.'", missao: "Use esta resposta com cliente que tem fornecedor fixo.", dica: "Você não ataca. Mostra que são produtos diferentes." },
+            { dia: 11, titulo: "⏰ Objeção: Depois eu ligo", frase: "É um 'não' disfarçado.", conteudo: "🔍 O que ele quer dizer: Não quer dizer não / Falta informação.\n🎯 Resposta: 'Me dá 1 minuto pra deixar um pacote grátis. Você prova e amanhã me liga.'", missao: "Treine esta resposta com tom educado, mas firme.", dica: "Você não sai de mãos vazias. A amostra vende sozinha." },
+            { dia: 12, titulo: "📊 Objeção: Concorrente é mais barato", frase: "Preço menor nem sempre é negócio melhor.", conteudo: "🔍 O que ele quer dizer: Só olha preço, não margem.\n💡 Pergunte: 'Busca apenas preço ou também margem e giro?'\n🎯 Resposta: 'Às vezes o produto mais barato custa mais caro quando não gira.'", missao: "Responda cliente que compara preço.", dica: "Reconhece o outro, mas mostra que o seu entrega mais valor." },
+            { dia: 13, titulo: "❓ Objeção: Não vende aqui", frase: "Vamos testar juntos.", conteudo: "🔍 O que ele quer dizer: Desconfiança ou experiência anterior ruim.\n💡 Pergunte: 'Já vendeu um produto igual ao nosso?'\n🎯 Resposta: 'Podemos fazer um teste pequeno e medir o resultado.'", missao: "Ofereça um teste pequeno para um cliente desconfiado.", dica: "Teste pequeno = risco zero para ele." },
+            { dia: 14, titulo: "🤔 Objeção: Vou pensar", frase: "Não é um não. É falta de informação.", conteudo: "🔍 O que ele quer dizer: Não quer dizer não / Falta informação.\n💡 Pergunte: 'O que o senhor gostaria de avaliar antes da decisão?'", missao: "Responda a um 'vou pensar' e descubra a real objeção.", dica: "Você não fica esperando. Volta com a resposta." },
+            { dia: 15, titulo: "💸 Objeção: Não tenho dinheiro", frase: "O problema é o momento, não o produto.", conteudo: "🔍 O que ele quer dizer: Momento difícil ou desculpa.\n🎯 Resposta: 'Entendi. Então o problema não é o produto. É o momento. Posso retornar na próxima semana?'", missao: "Use esta resposta com um cliente que diz não ter dinheiro.", dica: "Respeita o momento e mantém a porta aberta." },
+            { dia: 16, titulo: "👥 Objeção: Preciso falar com o sócio", frase: "Separe a objeção real da desculpa.", conteudo: "🔍 O que ele quer dizer: Objeção real ou desculpa educada.\n💡 Pergunte: 'Pessoalmente, o que o senhor achou da proposta?'", missao: "Use a pergunta de investigação e descubra o que ele realmente pensa.", dica: "Quem quer, dá um jeito. Quem não quer, dá desculpa." },
+            { dia: 17, titulo: "🏷️ Objeção: Não conheço a marca", frase: "Toda marca conhecida começou desconhecida.", conteudo: "🔍 O que ele quer dizer: Desconfiança do novo.\n🎯 Resposta: 'Perfeito. Toda marca conhecida começou desconhecida. É exatamente assim que novas oportunidades surgem.'", missao: "Use esta resposta para um cliente que desconhece a marca.", dica: "Transforme a objeção em motivo para começar." },
+            { dia: 18, titulo: "✨ Evite vs Use", frase: "Você não precisa derrubar ninguém para subir.", conteudo: "❌ Evite 'O biscoito dele é ruim' → ✅ Use 'O nosso tem um processo diferente'\n❌ Evite 'É cheio de química' → ✅ Use 'O nosso é 100% natural'", missao: "Escreva 3 versões respeitosas para frases agressivas.", dica: "Basta mostrar a sua própria altura." },
+            { dia: 19, titulo: "🤝 Consignado de 15 Dias", frase: "Se o cliente não arrisca, ele não compra.", conteudo: "Roteiro: 'Deixo 2 caixas hoje. Paga só o que vender em 15 dias. O que não vender, eu retiro.'", missao: "Ofereça consignado para um cliente novo hoje.", dica: "Consignado não é favor. É estratégia de entrada." },
+            { dia: 20, titulo: "📅 Fechamento com Ação", frase: "Não saia sem data.", conteudo: "Se não comprou: 'Posso voltar na quarta?' Se comprou: 'Volto semana que vem para ver como está vendendo?'", missao: "Marque uma data de volta com um cliente hoje.", dica: "Quem volta com amostra, vende. Quem some, perde." },
+            { dia: 21, titulo: "💖 Pós-Venda", frase: "A venda termina na recompra.", conteudo: "Checklist: 1. Produto na altura dos olhos. 2. Pacote grátis para funcionário. 3. Próxima visita em 10 dias.", missao: "Aplique o checklist na próxima entrega.", dica: "Funcionário feliz vende seu produto sem você pedir." },
+            { dia: 22, titulo: "🔄 Recuperar Cliente", frase: "Cliente que parou é oportunidade.", conteudo: "Roteiro: 'Faz tempo que não pede nosso biscoito. Posso levar uma amostra grátis hoje?'", missao: "Ligue para um cliente inativo.", dica: "Cliente antigo já conhece o produto. É o mais fácil." },
+            { dia: 23, titulo: "🎯 Meta: 1.000 Fardos", frase: "Juntos chegamos mais longe.", conteudo: "Hoje: 300 fardos/mês. Meta: 1.000 fardos até dezembro de 2026.", missao: "Calcule quantos clientes você precisa para bater a meta.", dica: "Sua comissão cresce junto com a fábrica." },
+            { dia: 24, titulo: "📈 Mostrar a Margem", frase: "Você mostra a conta, não pede pedido.", conteudo: "Exemplo: Concorrente: R$4 → R$7 = 42% | Vovó Maria: R$4,50 → R$8,50 = 47% | Diferença: +5 pontos.", missao: "Mostre a margem para um cliente.", dica: "Números convencem mais que palavras." },
+            { dia: 25, titulo: "🧘 O Poder do Silêncio", frase: "Quem fala primeiro perde.", conteudo: "Depois que mostra o produto e fala o preço, cale a boca. Deixe o cliente pensar.", missao: "Treine o silêncio: fale a proposta e fique 10 segundos em silêncio.", dica: "Silêncio não é vazio. É o cliente pensando." },
+            { dia: 26, titulo: "📝 Revisão", frase: "Repetição é a mãe da habilidade.", conteudo: "Revise todas as objeções. Treine até sair automático.", missao: "Grave um áudio respondendo as objeções em sequência.", dica: "Se errar, repita. Se acertar, comemore." },
+            { dia: 27, titulo: "🏆 Motivação", frase: "O sucesso é a soma de pequenos esforços repetidos.", conteudo: "Cada 'não' te ensinou algo. Cada 'sim' te aproximou da meta. Continue.", missao: "Escreva uma frase de motivação para você mesmo.", dica: "Você não está vendendo biscoito. Está construindo uma história." },
+            { dia: 28, titulo: "📝 Plano de Ação", frase: "Da teoria à prática.", conteudo: "Meta: ___ novos clientes. ___ fardos adicionais.", missao: "Preencha sua meta para os próximos 30 dias.", dica: "Escreva. Me envie. Eu vou cobrar com carinho." },
+            { dia: 29, titulo: "📋 O que Você Ganha", frase: "Seu sucesso é o meu sucesso.", conteudo: "Mais vendas = mais comissão. Mais estabilidade. Mais orgulho.", missao: "Grave 1 minuto: o que você quer conquistar?", dica: "Este treinamento é para você crescer." },
+            { dia: 30, titulo: "🎓 Revisão Final", frase: "Treinamento não é evento. É hábito.", conteudo: "Revisite os dias difíceis. Reouça os áudios. Releia as frases.", missao: "Refaça o simulado completo.", dica: "Você pode refazer quantas vezes quiser." },
+            { dia: 31, titulo: "🎉 Você Concluiu!", frase: "Parabéns! Você é um vendedor Vovó Maria.", conteudo: "31 dias. 10 minutos por dia. Você mudou sua postura, abordagem e mentalidade. Agora é buscar os 1.000 fardos.", missao: "Comemore! E amanhã, recomece.", dica: "Compartilhe sua conquista com a equipe." }
+        ];
+
+        // ============================================
+        // ESTRUTURA DE DADOS DO USUÁRIO
+        // ============================================
+        let userData = JSON.parse(localStorage.getItem('vovomaria_data')) || {
+            completedDays: [],
+            dailyCompletions: {},
+            activeTimers: {},
+            lastAccessDate: null
+        };
+
+        let timerIntervals = {};
+
+        // ============================================
+        // FUNÇÕES AUXILIARES
+        // ============================================
+        function getTodayKey() {
+            return new Date().toISOString().split('T')[0];
+        }
+
+        function getAulasFeitasHoje() {
+            const today = getTodayKey();
+            return userData.dailyCompletions[today] || 0;
+        }
+
+        function registrarAulaFeita() {
+            const today = getTodayKey();
+            userData.dailyCompletions[today] = (userData.dailyCompletions[today] || 0) + 1;
+        }
+
+        function podeFazerAula(dia) {
+            const aulasHoje = getAulasFeitasHoje();
+            if (aulasHoje >= 2) {
+                return { allowed: false, reason: "Você já completou 2 aulas hoje. Volte amanhã!" };
+            }
+            if (userData.completedDays.includes(dia)) {
+                return { allowed: false, reason: "Esta aula já foi concluída!" };
+            }
+            return { allowed: true, reason: null };
+        }
+
+        function getAulasLiberadas() {
+            const completed = userData.completedDays;
+            if (completed.length === 0) return [1];
+            
+            const ultimaAula = Math.max(...completed);
+            const aulasLiberadas = [];
+            
+            // Verifica pendência do dia anterior
+            const ontem = new Date();
+            ontem.setDate(ontem.getDate() - 1);
+            const ontemKey = ontem.toISOString().split('T')[0];
+            const aulasFeitasOntem = userData.dailyCompletions[ontemKey] || 0;
+            
+            if (aulasFeitasOntem < 2 && completed.length > 0) {
+                const pendente = completed[completed.length - 1] + 1;
+                if (pendente <= modules.length && !userData.completedDays.includes(pendente)) {
+                    aulasLiberadas.push(pendente);
+                }
+            }
+            
+            // Próxima aula nova
+            const proximaAula = ultimaAula + 1;
+            if (proximaAula <= modules.length && !userData.completedDays.includes(proximaAula) && !aulasLiberadas.includes(proximaAula)) {
+                if (aulasLiberadas.length < 2) {
+                    aulasLiberadas.push(proximaAula);
+                }
+            }
+            
+            return aulasLiberadas;
+        }
+
+        function getStatusAula(dia) {
+            if (userData.completedDays.includes(dia)) return 'completed';
+            
+            const liberadas = getAulasLiberadas();
+            if (liberadas.includes(dia)) return 'available';
+            
+            // Verifica se é pendente do dia anterior
+            const ontem = new Date();
+            ontem.setDate(ontem.getDate() - 1);
+            const ontemKey = ontem.toISOString().split('T')[0];
+            const aulasFeitasOntem = userData.dailyCompletions[ontemKey] || 0;
+            
+            if (aulasFeitasOntem < 2 && dia === (Math.max(...userData.completedDays, 0) + 1)) {
+                return 'pending';
+            }
+            
+            return 'locked';
+        }
+
+        function getStreak() {
+            let streak = 0;
+            let currentDate = new Date();
+            
+            for (let i = 0; i < 31; i++) {
+                const dateKey = currentDate.toISOString().split('T')[0];
+                const completions = userData.dailyCompletions[dateKey] || 0;
+                
+                if (completions > 0) {
+                    streak++;
+                    currentDate.setDate(currentDate.getDate() - 1);
+                } else {
+                    break;
+                }
+            }
+            return streak;
+        }
+
+        function getPendenciaMessage() {
+            const liberadas = getAulasLiberadas();
+            const feitasHoje = getAulasFeitasHoje();
+            
+            if (feitasHoje >= 2) return "✅ Você já completou suas 2 aulas de hoje! Volte amanhã.";
+            if (liberadas.length === 0) return "🎉 Parabéns! Você concluiu todo o treinamento!";
+            if (liberadas.length === 1 && liberadas[0] > 0) {
+                const ultimaConcluida = Math.max(...userData.completedDays, 0);
+                if (liberadas[0] === ultimaConcluida + 1) {
+                    return "📚 Hoje você tem 1 aula nova disponível. Aproveite!";
+                } else {
+                    return "⚠️ Você tem uma aula pendente do dia anterior. Complete-a para avançar!";
+                }
+            }
+            return `📚 Hoje você tem ${liberadas.length} aulas disponíveis (máximo 2 por dia)`;
+        }
+
+        function mostrarMensagem(msg, isError = false) {
+            const existing = document.querySelector('.message-toast');
+            if (existing) existing.remove();
+            
+            const toast = document.createElement('div');
+            toast.className = 'message-toast';
+            toast.textContent = msg;
+            toast.style.background = isError ? '#dc2626' : '#1e293b';
+            document.body.appendChild(toast);
+            
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        function salvarDados() {
+            localStorage.setItem('vovomaria_data', JSON.stringify(userData));
+            renderizar();
+        }
+
+        // ============================================
+        // FUNÇÕES PRINCIPAIS
+        // ============================================
+        function iniciarTimer(dia) {
+            const status = getStatusAula(dia);
+            if (status !== 'available') {
+                if (status === 'completed') mostrarMensagem("📚 Esta aula já foi concluída!", true);
+                else if (status === 'locked') mostrarMensagem("🔒 Complete as aulas anteriores primeiro!", true);
+                else if (status === 'pending') mostrarMensagem("⚠️ Esta aula está pendente do dia anterior. Complete-a!", true);
+                return;
+            }
+            
+            const pode = podeFazerAula(dia);
+            if (!pode.allowed) {
+                mostrarMensagem(pode.reason, true);
+                return;
+            }
+            
+            if (userData.activeTimers[dia] && userData.activeTimers[dia].active) {
+                mostrarMensagem("⏰ Timer já está em andamento!", true);
+                return;
+            }
+            
+            userData.activeTimers[dia] = {
+                secondsLeft: 600,
+                active: true
+            };
+            
+            if (timerIntervals[dia]) clearInterval(timerIntervals[dia]);
+            
+            timerIntervals[dia] = setInterval(() => {
+                if (userData.activeTimers[dia] && userData.activeTimers[dia].active) {
+                    if (userData.activeTimers[dia].secondsLeft > 0) {
+                        userData.activeTimers[dia].secondsLeft--;
+                        renderizar();
+                        
+                        // Mensagens motivacionais
+                        const seconds = userData.activeTimers[dia].secondsLeft;
+                        if (seconds === 480) mostrarMensagem("⚡ 2 minutos! Continue focado!", false);
+                        if (seconds === 360) mostrarMensagem("🎯 Metade do caminho! Persista!", false);
+                        if (seconds === 240) mostrarMensagem("💪 Já são 6 minutos! Você consegue!", false);
+                        if (seconds === 120) mostrarMensagem("🔥 Últimos 2 minutos! Dê seu máximo!", false);
+                    } else {
+                        userData.activeTimers[dia].active = false;
+                        clearInterval(timerIntervals[dia]);
+                        mostrarMensagem(`🎉 Treino do Dia ${dia} completo! Agora clique em "Concluir Aula"`, false);
+                        renderizar();
+                    }
+                }
+            }, 1000);
+            
+            salvarDados();
+        }
+
+        function concluirAula(dia) {
+            const status = getStatusAula(dia);
+            if (status === 'completed') {
+                mostrarMensagem("Esta aula já foi concluída!", true);
+                return;
+            }
+            
+            if (status === 'locked') {
+                mostrarMensagem("Complete as aulas anteriores primeiro!", true);
+                return;
+            }
+            
+            const pode = podeFazerAula(dia);
+            if (!pode.allowed) {
+                mostrarMensagem(pode.reason, true);
+                return;
+            }
+            
+            const timer = userData.activeTimers[dia];
+            if (!timer || !timer.active || timer.secondsLeft > 0) {
+                mostrarMensagem("⏰ Complete os 10 minutos de treino antes de concluir!", true);
+                return;
+            }
+            
+            userData.completedDays.push(dia);
+            userData.completedDays.sort((a, b) => a - b);
+            registrarAulaFeita();
+            
+            if (timerIntervals[dia]) {
+                clearInterval(timerIntervals[dia]);
+                delete timerIntervals[dia];
+            }
+            delete userData.activeTimers[dia];
+            
+            userData.lastAccessDate = getTodayKey();
+            salvarDados();
+            
+            mostrarMensagem(`🎉 Aula ${dia} concluída! Continue assim! 🎉`, false);
+        }
+
+        // ============================================
+        // RENDERIZAÇÃO
+        // ============================================
+        function renderizar() {
+            const totalModules = modules.length;
+            const completedCount = userData.completedDays.length;
+            const progresso = Math.round((completedCount / totalModules) * 100);
+            const streak = getStreak();
+            const aulasHoje = getAulasFeitasHoje();
+            const aulasRestantes = Math.max(0, 2 - aulasHoje);
+            
+            let html = `
+                <div class="header">
+                    <div class="badge"><span>🍪 Vovó Maria</span></div>
+                    <h1>Universidade Comercial</h1>
+                    <p class="subtitle">10 minutos por aula • Máximo 2 aulas/dia</p>
+                    
+                    <div class="streak-card">
+                        <div>🔥 Sequência atual</div>
+                        <div class="streak-number">${streak} ${streak === 1 ? 'dia' : 'dias'}</div>
+                        <div style="font-size:12px; color:#94a3b8;">${aulasRestantes > 0 ? `Hoje você pode fazer mais ${aulasRestantes} aula(s)` : 'Hoje você já completou suas 2 aulas!'}</div>
+                        <div style="font-size:11px; margin-top:4px; color:#f97316;">${getPendenciaMessage()}</div>
+                    </div>
+                    
+                    <div class="progress-container">
+                        <div class="progress-bar"><div class="progress-fill" style="width: ${progresso}%"></div></div>
+                        <p class="progress-text">${completedCount} de ${totalModules} aulas • ${progresso}% completo</p>
+                    </div>
+                </div>
+            `;
+            
+            for (const mod of modules) {
+                const status = getStatusAula(mod.dia);
+                const isCompleted = status === 'completed';
+                const isAvailable = status === 'available';
+                const isLocked = status === 'locked';
+                const isPending = status === 'pending';
+                const timer = userData.activeTimers[mod.dia];
+                const timerActive = timer && timer.active;
+                const timerSeconds = timer ? timer.secondsLeft : 600;
+                const timerCompleto = timerActive === false && timerSeconds === 0;
+                
+                let statusIcon = '';
+                let statusClass = '';
+                if (isCompleted) {
+                    statusIcon = '✅';
+                    statusClass = 'completed';
+                } else if (isAvailable) {
+                    statusIcon = '📖';
+                    statusClass = 'available';
+                } else if (isPending) {
+                    statusIcon = '⚠️';
+                    statusClass = 'pending';
+                } else {
+                    statusIcon = '🔒';
+                    statusClass = 'locked';
+                }
+                
+                html += `
+                    <div class="card ${statusClass}">
+                        <div class="card-header">
+                            <span class="day-badge">Dia ${mod.dia}</span>
+                            <span class="status-badge">${statusIcon}</span>
+                        </div>
+                        <div class="quote"><p>"${mod.frase}"</p></div>
+                        <h3 class="card-title">${mod.titulo}</h3>
+                        <div class="content">${mod.conteudo}</div>
+                        <div class="mission"><strong>🎯 Missão:</strong> ${mod.missao}</div>
+                        <div class="tip"><strong>💡 Dica:</strong> <em>${mod.dica}</em></div>
+                `;
+                
+                if (!isCompleted) {
+                    if (timerActive && !isCompleted) {
+                        html += `
+                            <div class="timer-card" style="margin-bottom: 12px; padding: 12px;">
+                                <div class="timer-display" style="font-size: 32px;">${formatTime(timerSeconds)}</div>
+                                <div class="timer-label">Tempo restante do treino</div>
+                            </div>
+                        `;
+                    }
+                    
+                    html += `<div class="button-group">`;
+                    
+                    if (!timerActive && (isAvailable || isPending) && aulasHoje < 2) {
+                        html += `<button class="btn btn-primary" onclick="iniciarTimer(${mod.dia})">⏱️ Iniciar Treino (10min)</button>`;
+                    } else if (timerActive) {
+                        html += `<button class="btn btn-primary" disabled style="opacity:0.6">⏱️ Treino em andamento...</button>`;
+                    } else if (timerCompleto && (isAvailable || isPending)) {
+                        html += `<button class="btn btn-primary" disabled style="opacity:0.6">✅ Treino completo!</button>`;
+                    } else if (aulasHoje >= 2 && !isCompleted && !timerActive) {
+                        html += `<button class="btn btn-primary" disabled>⏰ Limite de 2 aulas/dia</button>`;
+                    } else if (isLocked) {
+                        html += `<button class="btn btn-primary" disabled>🔒 Complete aulas anteriores</button>`;
+                    }
+                    
+                    if (timerCompleto && (isAvailable || isPending) && aulasHoje < 2) {
+                        html += `<button class="btn btn-success" onclick="concluirAula(${mod.dia})">📌 Concluir Aula</button>`;
+                    } else if ((isAvailable || isPending) && aulasHoje < 2 && !timerActive && !timerCompleto) {
+                        html += `<button class="btn btn-outline" disabled style="opacity:0.5">⏳ Complete o treino primeiro</button>`;
+                    } else if (isPending && aulasHoje >= 2) {
+                        html += `<button class="btn btn-outline" disabled>⚠️ Pendência - Amanhã disponível</button>`;
+                    }
+                    
+                    html += `</div>`;
+                } else {
+                    html += `<div style="text-align:center; padding:8px; background:#ecfdf5; border-radius:50px;"><span style="color:#10b981;">✅ Aula concluída</span></div>`;
+                }
+                
+                html += `</div>`;
+            }
+            
+            html += `
+                <div class="footer">
+                    <p>🎯 <strong>Meta: 1.000 fardos até dezembro de 2026</strong></p>
+                    <p style="font-size:11px; margin-top:8px;">Treino diário: 10 min por aula • Máximo 2 aulas/dia • Revisão automática</p>
+                    <p style="font-size:10px; margin-top:4px; color:#475569;">🎨 Cores psicologicamente otimizadas para aprendizado e retenção</p>
+                </div>
+            `;
+            
+            document.getElementById('app').innerHTML = html;
+        }
+
+        window.iniciarTimer = iniciarTimer;
+        window.concluirAula = concluirAula;
+        
+        renderizar();
+    </script>
+</body>
+</html>

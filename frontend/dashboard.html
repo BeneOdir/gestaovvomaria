@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gestão Vovó Maria · Dashboard</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:linear-gradient(145deg,#FFF7ED,#FFEFE0);min-height:100vh;padding:18px;color:#432818}
+    .wrap{max-width:980px;margin:auto}
+    .top{background:white;border-radius:28px;padding:22px;box-shadow:0 18px 35px -18px rgba(0,0,0,.25);margin-bottom:18px}
+    .brand{display:flex;align-items:center;gap:14px}
+    .logo{width:78px;height:78px;object-fit:contain}
+    h1{font-size:25px;color:#78350F}
+    .sub{color:#9A3412;font-size:14px;margin-top:4px}
+    .user{margin-top:16px;background:#FFF7ED;border:1px solid #FED7AA;border-radius:18px;padding:14px;color:#7C2D12}
+    .mission{margin-top:14px;background:#FFEDD5;border-left:5px solid #EA580C;border-radius:16px;padding:14px;font-weight:800;color:#7C2D12}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}
+    .card{background:white;border-radius:24px;padding:20px;box-shadow:0 14px 28px -18px rgba(0,0,0,.25);border:1px solid rgba(249,115,22,.18);cursor:pointer;transition:.2s;text-decoration:none;color:#432818;display:block}
+    .card:hover{transform:translateY(-2px);box-shadow:0 20px 35px -18px rgba(0,0,0,.32)}
+    .icon{font-size:32px;margin-bottom:10px}
+    .title{font-weight:900;font-size:18px;color:#78350F}
+    .desc{font-size:13px;color:#9A3412;margin-top:6px;line-height:1.35}
+    .soon{opacity:.62;cursor:not-allowed}
+    .badge{display:inline-block;margin-top:12px;font-size:11px;font-weight:800;padding:5px 10px;border-radius:999px;background:#FED7AA;color:#9A3412}
+    .ok{background:#D1FAE5;color:#065F46}
+    .footer{text-align:center;margin-top:22px;color:#B45309;font-size:12px}
+    .logout{margin-top:14px;border:0;background:#991B1B;color:white;border-radius:999px;padding:11px 18px;font-weight:800;cursor:pointer}
+    @media(max-width:620px){
+      body{padding:12px}
+      .top{border-radius:22px;padding:18px}
+      .brand{flex-direction:column;text-align:center}
+      .logo{width:110px;height:110px}
+      .grid{grid-template-columns:1fr}
+      .card{padding:18px}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="brand">
+        <img src="images/logo-vm-gestao.png" class="logo" alt="Vovó Maria">
+        <div>
+          <h1>Gestão Comercial Vovó Maria</h1>
+          <div class="sub">Painel principal · CRM · Visitas · Vendas · Relatórios</div>
+        </div>
+      </div>
+
+      <div class="user">
+        <strong>Olá, <span id="nomeUsuario">usuário</span></strong><br>
+        Perfil: <span id="perfilUsuario">---</span>
+      </div>
+
+      <div class="mission">
+        🎯 Missão 2026: chegar a 1.000 fardos/mês até dezembro.
+      </div>
+
+      <button class="logout" onclick="sair()">Sair do sistema</button>
+    </div>
+
+    <div class="grid">
+      <a class="card" href="clientes.html">
+        <div class="icon">👥</div>
+        <div class="title">Clientes</div>
+        <div class="desc">Cadastrar, buscar e localizar clientes por nome, cidade, CNPJ ou CPF.</div>
+        <span class="badge ok">Disponível</span>
+      </a>
+
+      <a class="card" href="visita.html">
+        <div class="icon">🚚</div>
+        <div class="title">Visita / Venda</div>
+        <div class="desc">Registrar visita, venda, produtos, quantidade, valor e observações.</div>
+        <span class="badge ok">Disponível</span>
+      </a>
+
+      <a class="card" href="relatorio-dia.html">
+        <div class="icon">📊</div>
+        <div class="title">Relatório do Dia</div>
+        <div class="desc">Resumo diário de visitas, vendas, fardos e valor vendido.</div>
+        <span class="badge ok">Disponível</span>
+      </a>
+
+      <a class="card" href="treinamento.html">
+        <div class="icon">🎓</div>
+        <div class="title">Universidade Comercial</div>
+        <div class="desc">Treinamento diário de vendas, objeções, abordagem e evolução comercial.</div>
+        <span class="badge ok">Disponível</span>
+      </a>
+
+      <a class="card admin-only" href="vendedores.html">
+        <div class="icon">👤</div>
+        <div class="title">Vendedores</div>
+        <div class="desc">Cadastrar, editar, ativar ou desativar vendedores.</div>
+        <span class="badge ok">Disponível</span>
+      </a>
+
+      <div class="card soon">
+        <div class="icon">📦</div>
+        <div class="title">Produtos</div>
+        <div class="desc">Cadastro e gestão dos produtos da Vovó Maria.</div>
+        <span class="badge">Em breve</span>
+      </div>
+
+      <div class="card soon">
+        <div class="icon">📅</div>
+        <div class="title">Agenda</div>
+        <div class="desc">Próximas visitas, melhores dias e horários de atendimento.</div>
+        <span class="badge">Em breve</span>
+      </div>
+
+      <div class="card soon">
+        <div class="icon">🎯</div>
+        <div class="title">Metas</div>
+        <div class="desc">Controle de fardos, clientes novos e crescimento mensal.</div>
+        <span class="badge">Em breve</span>
+      </div>
+
+      <div class="card soon">
+        <div class="icon">🏭</div>
+        <div class="title">Produção</div>
+        <div class="desc">Receitas produzidas, previsão de produção e produto acabado.</div>
+        <span class="badge">Em breve</span>
+      </div>
+
+      <div class="card soon">
+        <div class="icon">🧺</div>
+        <div class="title">Estoque</div>
+        <div class="desc">Matéria-prima, embalagens e produtos prontos para venda.</div>
+        <span class="badge">Em breve</span>
+      </div>
+    </div>
+
+    <div class="footer">
+      © 2026 BeneOdir · Gestão Vovó Maria
+    </div>
+  </div>
+
+<script>
+const token = localStorage.getItem("token");
+const nome = localStorage.getItem("vendedorNome");
+const role = localStorage.getItem("vendedorRole");
+
+if(!token){
+  window.location.href = "login.html";
+}
+
+document.getElementById("nomeUsuario").textContent = nome || "usuário";
+document.getElementById("perfilUsuario").textContent = role || "vendedor";
+
+if(role !== "admin"){
+  document.querySelectorAll(".admin-only").forEach(el => el.style.display = "none");
+}
+
+function sair(){
+  localStorage.removeItem("token");
+  localStorage.removeItem("vendedorId");
+  localStorage.removeItem("vendedorNome");
+  localStorage.removeItem("vendedorRole");
+  window.location.href = "login.html";
+}
+</script>
+</body>
+</html>

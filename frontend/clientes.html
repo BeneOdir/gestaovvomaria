@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Gestão Vovó Maria · Clientes V1.2</title>
+  <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.js"></script>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:#F5F0E8;padding:18px;color:#431407}
+    .container{max-width:720px;margin:0 auto;background:white;border-radius:28px;padding:20px;box-shadow:0 10px 24px rgba(0,0,0,.10)}
+    .top{display:flex;align-items:center;gap:14px;margin-bottom:16px}
+    .logo{width:82px;height:82px;object-fit:contain;border-radius:20px}
+    h1{font-size:22px;color:#78350F}
+    .sub{font-size:12px;color:#B45309;margin-top:2px}
+    .status{padding:11px 13px;border-radius:16px;background:#FEF3C7;margin:12px 0 18px;font-size:13px;text-align:center;color:#92400E}
+    .status.ok{background:#D1FAE5;color:#065F46}
+    .status.err{background:#FEE2E2;color:#991B1B}
+    .status.warn{background:#FEF3C7;color:#92400E}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .group{margin-bottom:13px}
+    label{display:block;font-size:13px;font-weight:800;color:#6B2E0E;margin:0 0 6px 7px}
+    input,select,textarea{width:100%;padding:12px 14px;border:2px solid #FCD8AF;border-radius:22px;font-size:14px;outline:none;background:white}
+    textarea{border-radius:18px;resize:vertical}
+    input:focus,select:focus,textarea:focus{border-color:#F97316;box-shadow:0 0 0 3px rgba(249,115,22,.12)}
+    .btn{width:100%;border:0;border-radius:999px;padding:13px;font-weight:900;cursor:pointer;margin-top:8px}
+    .primary{background:#EA580C;color:white}
+    .dark{background:#7C2D12;color:white}
+    .soft{background:#FED7AA;color:#7C2D12}
+    .muted{background:#E7E5E4;color:#44403C}
+    .actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+    .client-card{border:1px solid #FED7AA;border-radius:18px;padding:12px;margin-top:12px;background:#FFF7ED;font-size:13px}
+    .client-card strong{color:#EA580C}
+    .pill{display:inline-block;padding:3px 9px;border-radius:999px;background:#FFEDD5;color:#9A3412;font-size:11px;font-weight:800;margin-top:5px}
+    .hidden{display:none}
+    .bar{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-top:10px}
+    .small{font-size:12px;color:#78716C}
+    .search-panel{margin-top:14px;border:1px solid #FED7AA;background:#FFFBEB;border-radius:20px;padding:14px}
+    .search-title{font-weight:900;color:#78350F;margin-bottom:10px;text-align:center}
+    .mini-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+    .card-actions{display:grid;grid-template-columns:1fr;gap:8px;margin-top:10px}
+    .btn-mini{display:block;text-align:center;text-decoration:none;border:0;border-radius:999px;padding:9px 10px;font-weight:900;font-size:12px;background:#EA580C;color:white}
+    .count-box{border:1px solid #FED7AA;border-radius:18px;padding:10px;margin-top:12px;background:#FFF7ED;font-size:13px;color:#7C2D12}
+    @media(max-width:620px){.grid2,.actions{grid-template-columns:1fr}.top{flex-direction:column;text-align:center}.logo{width:130px;height:130px}}
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="top">
+    <img src="images/logo-vm-gestao.png" class="logo" alt="Gestão Vovó Maria">
+    <div>
+      <h1>Cadastro de Clientes</h1>
+      <div class="sub">Gestão Vovó Maria · Software de Gestão Comercial</div>
+      <div class="small" id="userInfo"></div>
+    </div>
+  </div>
+
+  <div id="statusMsg" class="status">Preencha os dados do cliente.</div>
+
+  <form id="clienteForm">
+    <div class="grid2">
+      <div class="group">
+        <label>Tipo de pessoa *</label>
+        <select id="tipo_pessoa">
+          <option value="PJ">Pessoa Jurídica / CNPJ</option>
+          <option value="PF">Pessoa Física / CPF</option>
+        </select>
+      </div>
+      <div class="group">
+        <label>Status comercial</label>
+        <select id="status_comercial">
+          <option value="prospect">Prospect</option>
+          <option value="ativo">Cliente ativo</option>
+          <option value="sem_compra">Cliente sem compra</option>
+          <option value="perdido">Cliente perdido</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="areaCNPJ">
+      <div class="grid2">
+        <div class="group"><label>CNPJ *</label><input id="cnpj" placeholder="99.999.999/9999-99"></div>
+        <div class="group"><label>&nbsp;</label><button type="button" class="btn soft" id="btnBuscarCNPJ">Buscar CNPJ</button></div>
+      </div>
+    </div>
+
+    <div id="areaCPF" class="hidden">
+      <div class="group"><label>CPF *</label><input id="cpf" placeholder="999.999.999-99"></div>
+    </div>
+
+    <div class="group"><label>Razão social / Nome oficial</label><input id="razao_social"></div>
+    <div class="group"><label>Nome fantasia / Identificação *</label><input id="nome_fantasia" placeholder="Ex.: Posto Canela, Mercado São José"></div>
+
+    <div class="grid2">
+      <div class="group"><label>Inscrição Estadual</label><input id="ie" placeholder="Opcional"></div>
+      <div class="group">
+        <label>Situação IE</label>
+        <select id="situacao_ie">
+          <option value="pendente">Pendente</option>
+          <option value="informada">Informada</option>
+          <option value="isento">Isento</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="group"><label>Responsável empresa</label><input id="responsavel_empresa"></div>
+      <div class="group"><label>Responsável compras</label><input id="responsavel_compra"></div>
+    </div>
+
+    <div class="grid2">
+      <div class="group"><label>Telefone</label><input id="telefone" placeholder="(65) 99999-9999"></div>
+      <div class="group"><label>WhatsApp</label><input id="whatsapp" placeholder="(65) 99999-9999"></div>
+    </div>
+
+    <div class="grid2">
+      <div class="group"><label>Instagram</label><input id="instagram" placeholder="@cliente"></div>
+      <div class="group"><label>E-mail</label><input id="email" type="email"></div>
+    </div>
+
+    <div class="group"><label>Contato emergência</label><input id="contato_emergencia"></div>
+
+    <div class="grid2">
+      <div class="group"><label>CEP</label><input id="cep" placeholder="99999-999"></div>
+      <div class="group"><label>Estado *</label><input id="estado" placeholder="MT" maxlength="2"></div>
+    </div>
+
+    <div class="group"><label>Endereço</label><input id="endereco" placeholder="Rua, número, bairro"></div>
+    <div class="group"><label>Cidade *</label><input id="cidade"></div>
+
+    <div class="grid2">
+      <div class="group">
+        <label>Status cliente</label>
+        <select id="status_cliente">
+          <option value="ativo">Ativo</option>
+          <option value="inativo">Inativo</option>
+        </select>
+      </div>
+      <div class="group"><label>Última visita</label><input id="ultima_visita" type="date"></div>
+    </div>
+
+    <div class="group"><label>Concorrentes</label><input id="concorrentes" placeholder="Separe por vírgula"></div>
+    <div class="group"><label>Observações gerais</label><textarea id="observacoes_gerais" rows="3"></textarea></div>
+
+    <button class="btn primary" type="submit">Salvar cliente</button>
+  </form>
+
+  <div class="actions">
+    <button class="btn dark" id="btnListar" type="button">Ver clientes locais</button>
+    <button class="btn soft" id="btnListarNuvem" type="button">Ver clientes da nuvem</button>
+    <button class="btn soft" id="btnSincronizar" type="button">Sincronizar pendentes</button>
+    <button class="btn muted" id="btnLimparLocal" type="button">Limpar dados locais de teste</button>
+  </div>
+  <button class="btn muted" id="btnSair" type="button">Sair</button>
+
+  <div class="search-panel">
+    <div class="search-title">🔎 Localizar clientes</div>
+    <div class="group">
+      <label>Buscar por nome, CNPJ/CPF, cidade, bairro, telefone ou Instagram</label>
+      <input id="buscaTexto" placeholder="Ex.: paulista, cuiabá, várzea, 6530, @cliente">
+    </div>
+    <div class="grid2">
+      <div class="group">
+        <label>Cidade</label>
+        <input id="filtroCidade" placeholder="Todas">
+      </div>
+      <div class="group">
+        <label>Status comercial</label>
+        <select id="filtroStatusComercial">
+          <option value="">Todos</option>
+          <option value="prospect">Prospect</option>
+          <option value="ativo">Cliente ativo</option>
+          <option value="sem_compra">Sem compra</option>
+          <option value="perdido">Perdido</option>
+        </select>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="group">
+        <label>Status cliente</label>
+        <select id="filtroStatusCliente">
+          <option value="">Todos</option>
+          <option value="ativo">Ativo</option>
+          <option value="inativo">Inativo</option>
+        </select>
+      </div>
+      <div class="group">
+        <label>Origem da lista</label>
+        <select id="filtroOrigem">
+          <option value="nuvem">Nuvem</option>
+          <option value="local">Local</option>
+        </select>
+      </div>
+    </div>
+    <div class="mini-actions">
+      <button class="btn soft" id="btnAplicarBusca" type="button">Pesquisar</button>
+      <button class="btn muted" id="btnLimparBusca" type="button">Limpar busca</button>
+    </div>
+  </div>
+
+  <div id="listaClientes"></div>
+</div>
+
+<script>
+const API_URL = "https://gestaovvomaria-api.odir-bene12.workers.dev";
+
+const db = new Dexie("VovoMariaDB_v2");
+db.version(2).stores({
+  clientes: "++id, documento, cnpj, cpf, sync_status, vendedor_id",
+  syncQueue: "++id, entidade, acao, status, local_id"
+});
+
+let token = localStorage.getItem("token");
+let vendedorId = localStorage.getItem("vendedorId");
+let vendedorNome = localStorage.getItem("vendedorNome") || "Usuário";
+let ultimaListaClientes = [];
+let ultimaOrigemClientes = "clientes locais deste aparelho";
+
+if(!token){
+  alert("Faça login primeiro.");
+  window.location.href = "login.html";
+}
+
+document.getElementById("userInfo").textContent = "Logado como: " + vendedorNome;
+
+function onlyNumbers(v){ return String(v || "").replace(/\D/g,""); }
+function setStatus(msg, tipo="warn"){
+  const el = document.getElementById("statusMsg");
+  el.textContent = msg;
+  el.className = "status " + tipo;
+}
+
+function maskCNPJ(v){ return onlyNumbers(v).replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{0,2}).*/,"$1.$2.$3/$4-$5").slice(0,18); }
+function maskCPF(v){ return onlyNumbers(v).replace(/^(\d{3})(\d{3})(\d{3})(\d{0,2}).*/,"$1.$2.$3-$4").slice(0,14); }
+function maskCEP(v){ return onlyNumbers(v).replace(/^(\d{5})(\d{0,3}).*/,"$1-$2").slice(0,9); }
+function maskPhone(v){ 
+  const n=onlyNumbers(v).slice(0,11);
+  if(n.length>10) return n.replace(/^(\d{2})(\d{5})(\d{0,4}).*/,"($1) $2-$3");
+  return n.replace(/^(\d{2})(\d{4})(\d{0,4}).*/,"($1) $2-$3");
+}
+
+["cnpj","cpf","cep","telefone","whatsapp"].forEach(id=>{
+  document.getElementById(id).addEventListener("input", function(){
+    if(id==="cnpj") this.value=maskCNPJ(this.value);
+    if(id==="cpf") this.value=maskCPF(this.value);
+    if(id==="cep") this.value=maskCEP(this.value);
+    if(id==="telefone" || id==="whatsapp") this.value=maskPhone(this.value);
+  });
+});
+
+document.getElementById("tipo_pessoa").addEventListener("change", function(){
+  const pj = this.value === "PJ";
+  document.getElementById("areaCNPJ").classList.toggle("hidden", !pj);
+  document.getElementById("areaCPF").classList.toggle("hidden", pj);
+});
+
+document.getElementById("cep").addEventListener("blur", async function(){
+  const cep = onlyNumbers(this.value);
+  if(cep.length !== 8) return;
+  try{
+    const resp = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+    const d = await resp.json();
+    if(!d.erro){
+      document.getElementById("endereco").value = [d.logradouro, d.bairro].filter(Boolean).join(", ");
+      document.getElementById("cidade").value = d.localidade || "";
+      document.getElementById("estado").value = d.uf || "";
+      setStatus("CEP encontrado.", "ok");
+    }
+  }catch(e){}
+});
+
+document.getElementById("btnBuscarCNPJ").addEventListener("click", buscarCNPJ);
+document.getElementById("cnpj").addEventListener("blur", function(){
+  if(onlyNumbers(this.value).length===14) buscarCNPJ();
+});
+
+async function buscarCNPJ(){
+  const cnpj = onlyNumbers(document.getElementById("cnpj").value);
+  if(cnpj.length !== 14){
+    setStatus("Informe um CNPJ válido para buscar.", "err");
+    return;
+  }
+
+  const local = await db.clientes.where("documento").equals(cnpj).first();
+  if(local){
+    setStatus("Este CNPJ já existe no aparelho. Mostrando registro local abaixo.", "warn");
+    await listarClientes("local", cnpj);
+    return;
+  }
+
+  setStatus("Buscando CNPJ...", "warn");
+
+  async function consultarViaApiPropria(){
+    const resp = await fetch(`${API_URL}/api/cnpj/${cnpj}`);
+    if(!resp.ok) throw new Error("API própria não retornou CNPJ.");
+    return await resp.json();
+  }
+
+  async function consultarViaBrasilApi(){
+    const resp = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`);
+    if(!resp.ok) throw new Error("CNPJ não encontrado automaticamente.");
+    return await resp.json();
+  }
+
+  try{
+    let d;
+    try{
+      d = await consultarViaApiPropria();
+    }catch(e){
+      d = await consultarViaBrasilApi();
+    }
+
+    document.getElementById("razao_social").value = d.razao_social || d.nome || "";
+    document.getElementById("nome_fantasia").value = d.nome_fantasia || d.razao_social || d.nome || "";
+    document.getElementById("telefone").value = maskPhone(d.ddd_telefone_1 || d.telefone || "");
+    document.getElementById("email").value = d.email || "";
+    document.getElementById("cep").value = maskCEP(d.cep || "");
+    document.getElementById("endereco").value = [d.logradouro, d.numero, d.bairro].filter(Boolean).join(", ");
+    document.getElementById("cidade").value = d.municipio || d.localidade || "";
+    document.getElementById("estado").value = d.uf || "";
+    setStatus("CNPJ encontrado. Confira os dados antes de salvar.", "ok");
+  }catch(err){
+    setStatus("Busca automática indisponível ou CNPJ não encontrado. Preencha manualmente.", "warn");
+  }
+}
+
+function montarCliente(){
+  const tipo = document.getElementById("tipo_pessoa").value;
+  const cnpj = onlyNumbers(document.getElementById("cnpj").value);
+  const cpf = onlyNumbers(document.getElementById("cpf").value);
+  const documento = tipo === "PJ" ? cnpj : cpf;
+
+  return {
+    vendedor_id: vendedorId,
+    tipo_pessoa: tipo,
+    documento,
+    cnpj,
+    cpf,
+    razao_social: document.getElementById("razao_social").value.trim(),
+    nome_estabelecimento: document.getElementById("razao_social").value.trim(),
+    nome_fantasia: document.getElementById("nome_fantasia").value.trim(),
+    ie: document.getElementById("ie").value.trim(),
+    situacao_ie: document.getElementById("situacao_ie").value,
+    responsavel_empresa: document.getElementById("responsavel_empresa").value.trim(),
+    responsavel_compra: document.getElementById("responsavel_compra").value.trim(),
+    telefone: onlyNumbers(document.getElementById("telefone").value),
+    whatsapp: onlyNumbers(document.getElementById("whatsapp").value),
+    instagram: document.getElementById("instagram").value.trim(),
+    email: document.getElementById("email").value.trim(),
+    contato_emergencia: document.getElementById("contato_emergencia").value.trim(),
+    cep: onlyNumbers(document.getElementById("cep").value),
+    endereco: document.getElementById("endereco").value.trim(),
+    cidade: document.getElementById("cidade").value.trim(),
+    estado: document.getElementById("estado").value.trim().toUpperCase(),
+    concorrentes: document.getElementById("concorrentes").value.trim(),
+    observacoes_gerais: document.getElementById("observacoes_gerais").value.trim(),
+    status_comercial: document.getElementById("status_comercial").value,
+    status_cliente: document.getElementById("status_cliente").value,
+    ultima_visita: document.getElementById("ultima_visita").value
+  };
+}
+
+function validar(c){
+  if(!c.documento) return "Informe CNPJ ou CPF.";
+  if(!c.nome_fantasia && !c.razao_social) return "Informe nome fantasia ou razão social.";
+  if(!c.cidade) return "Informe a cidade.";
+  if(!c.estado) return "Informe o estado.";
+  return null;
+}
+
+document.getElementById("clienteForm").addEventListener("submit", async (e)=>{
+  e.preventDefault();
+  const cliente = montarCliente();
+  const erro = validar(cliente);
+  if(erro){ setStatus(erro, "err"); return; }
+
+  const jaExiste = await db.clientes.where("documento").equals(cliente.documento).first();
+  if(jaExiste){
+    setStatus("Este documento já está salvo neste aparelho.", "err");
+    return;
+  }
+
+  try{
+    const localId = await db.clientes.add({ ...cliente, sync_status:"pendente", created_at:new Date().toISOString() });
+    await db.syncQueue.add({
+      entidade:"cliente",
+      acao:"INSERT",
+      dados: JSON.stringify(cliente),
+      status:"pendente",
+      local_id: localId,
+      created_at:new Date().toISOString()
+    });
+    setStatus("Cliente salvo no aparelho. ID local: " + localId, "ok");
+    document.getElementById("clienteForm").reset();
+    document.getElementById("tipo_pessoa").dispatchEvent(new Event("change"));
+    await listarClientes();
+    await sincronizar();
+  }catch(err){
+    setStatus("Erro ao salvar localmente: " + err.message, "err");
+  }
+});
+
+async function renderClientes(lista, origem){
+  ultimaListaClientes = Array.isArray(lista) ? lista : [];
+  ultimaOrigemClientes = origem || "clientes";
+  renderClientesFiltrados();
+}
+
+function textoBuscaCliente(c){
+  return [
+    c.nome_fantasia, c.razao_social, c.nome_estabelecimento,
+    c.documento, c.cnpj, c.cpf,
+    c.cidade, c.estado, c.endereco,
+    c.telefone, c.whatsapp, c.instagram,
+    c.status_comercial, c.status_cliente
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function renderClientesFiltrados(){
+  const el = document.getElementById("listaClientes");
+  const busca = (document.getElementById("buscaTexto")?.value || "").trim().toLowerCase();
+  const cidade = (document.getElementById("filtroCidade")?.value || "").trim().toLowerCase();
+  const statusComercial = document.getElementById("filtroStatusComercial")?.value || "";
+  const statusCliente = document.getElementById("filtroStatusCliente")?.value || "";
+
+  let lista = [...ultimaListaClientes];
+
+  if(busca){
+    lista = lista.filter(c => textoBuscaCliente(c).includes(busca));
+  }
+  if(cidade){
+    lista = lista.filter(c => String(c.cidade || "").toLowerCase().includes(cidade));
+  }
+  if(statusComercial){
+    lista = lista.filter(c => String(c.status_comercial || "").toLowerCase() === statusComercial);
+  }
+  if(statusCliente){
+    lista = lista.filter(c => String(c.status_cliente || "").toLowerCase() === statusCliente);
+  }
+
+  if(!lista.length){
+    el.innerHTML = `<div class="client-card">Nenhum cliente encontrado em ${ultimaOrigemClientes} com os filtros atuais.</div>`;
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="count-box"><strong>${lista.length}</strong> cliente(s) encontrado(s) em ${ultimaOrigemClientes}.</div>
+    ${lista.map(c=>{
+      const nome = c.nome_fantasia || c.razao_social || c.nome_estabelecimento || "Cliente";
+      const origemNuvem = String(ultimaOrigemClientes).includes("nuvem");
+      const idCliente = c.id || c.cliente_id || "";
+      const visitaUrl = `visita.html?cliente_id=${encodeURIComponent(idCliente)}&cliente=${encodeURIComponent(nome)}`;
+      return `
+      <div class="client-card">
+        <strong>${nome}</strong><br>
+        ${c.tipo_pessoa || ""}: ${c.documento || c.cnpj || c.cpf || ""}<br>
+        Cidade: ${c.cidade || ""}/${c.estado || ""}<br>
+        Telefone: ${c.telefone || ""} ${c.instagram ? " · Instagram: " + c.instagram : ""}<br>
+        <span class="pill">${c.status_comercial || "prospect"}</span>
+        <span class="pill">${c.status_cliente || "ativo"}</span>
+        <span class="pill">${c.sync_status || (origemNuvem ? "nuvem" : "pendente")} ${idCliente ? "· ID: " + idCliente : ""}</span>
+        ${origemNuvem && idCliente ? `<div class="card-actions"><a class="btn-mini" href="${visitaUrl}">Registrar visita/venda</a></div>` : ""}
+      </div>`;
+    }).join("")}
+  `;
+}
+
+async function listarClientes(origem="local", documentoFiltro=null){
+  let lista = await db.clientes.toArray();
+  if(documentoFiltro) lista = lista.filter(c => String(c.documento || c.cnpj || c.cpf || "") === String(documentoFiltro));
+  lista.sort((a,b)=>(b.id||0)-(a.id||0));
+  await renderClientes(lista, "clientes locais deste aparelho");
+}
+
+async function listarClientesNuvem(){
+  if(!token){ setStatus("Sem token. Faça login novamente.", "err"); return; }
+  setStatus("Buscando clientes na nuvem...", "warn");
+  try{
+    const resp = await fetch(`${API_URL}/api/clientes`, {
+      method:"GET",
+      headers:{ "Authorization":`Bearer ${token}` }
+    });
+    const data = await resp.json();
+    if(!resp.ok) throw new Error(data.error || "Erro ao consultar nuvem");
+    setStatus("Clientes da nuvem carregados.", "ok");
+    await renderClientes(Array.isArray(data) ? data : [], "clientes da nuvem");
+  }catch(err){
+    setStatus("Não foi possível listar clientes da nuvem: " + err.message, "err");
+  }
+}
+
+async function sincronizar(){
+  const pendentes = await db.syncQueue.where("status").equals("pendente").toArray();
+  if(!pendentes.length){ setStatus("Nenhum item pendente para sincronizar.", "ok"); return; }
+  if(!token){ setStatus("Sem token. Faça login novamente.", "err"); return; }
+
+  try{
+    const resp = await fetch(`${API_URL}/api/sync`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json", "Authorization":`Bearer ${token}` },
+      body: JSON.stringify({ acoes: pendentes })
+    });
+    const data = await resp.json();
+    if(!resp.ok) throw new Error(data.error || "Erro na API");
+
+    let okCount = 0;
+    let avisoDuplicado = 0;
+
+    for(const r of data.resultados || []){
+      const localId = Number(r.local_id || 0);
+      const status = Number(r.status || 0);
+      const aceito = r.ok || status === 200 || status === 201;
+      const duplicado = status === 409;
+
+      if((aceito || duplicado) && localId){
+        await db.syncQueue.where("local_id").equals(localId).modify({ status:"sincronizado", synced_at:new Date().toISOString() });
+        await db.clientes.update(localId, { sync_status: duplicado ? "já existia na nuvem" : "sincronizado" });
+        if(duplicado) avisoDuplicado++; else okCount++;
+      }
+    }
+
+    // Segurança: se a API antiga retornar sucesso sem detalhes, não apaga clientes; só marca filas como sincronizadas se houver retorno individual.
+    if((data.resultados || []).length === 0 && data.success){
+      setStatus("API respondeu sucesso, mas sem detalhes dos itens. Confira na nuvem antes de limpar pendências.", "warn");
+    }else{
+      setStatus(`Sincronização concluída. Novos: ${okCount}. Já existentes: ${avisoDuplicado}.`, "ok");
+    }
+    await listarClientes();
+  }catch(err){
+    setStatus("Salvo no aparelho, mas ainda pendente na nuvem: " + err.message, "warn");
+  }
+}
+
+async function limparDadosLocaisTeste(){
+  const confirmar = confirm("Isso limpa apenas os dados locais deste navegador. Não apaga clientes já gravados na nuvem. Deseja continuar?");
+  if(!confirmar) return;
+  await db.clientes.clear();
+  await db.syncQueue.clear();
+  setStatus("Dados locais de teste limpos. A nuvem não foi alterada.", "ok");
+  await listarClientes();
+}
+
+document.getElementById("btnListar").addEventListener("click", ()=>listarClientes());
+document.getElementById("btnListarNuvem").addEventListener("click", listarClientesNuvem);
+document.getElementById("btnSincronizar").addEventListener("click", sincronizar);
+document.getElementById("btnLimparLocal").addEventListener("click", limparDadosLocaisTeste);
+document.getElementById("btnAplicarBusca").addEventListener("click", ()=>{
+  const origem = document.getElementById("filtroOrigem").value;
+  if(origem === "nuvem") listarClientesNuvem(); else listarClientes();
+});
+document.getElementById("btnLimparBusca").addEventListener("click", ()=>{
+  document.getElementById("buscaTexto").value = "";
+  document.getElementById("filtroCidade").value = "";
+  document.getElementById("filtroStatusComercial").value = "";
+  document.getElementById("filtroStatusCliente").value = "";
+  renderClientesFiltrados();
+});
+["buscaTexto","filtroCidade","filtroStatusComercial","filtroStatusCliente"].forEach(id=>{
+  document.getElementById(id).addEventListener("input", renderClientesFiltrados);
+  document.getElementById(id).addEventListener("change", renderClientesFiltrados);
+});
+document.getElementById("filtroOrigem").addEventListener("change", function(){
+  if(this.value === "nuvem") listarClientesNuvem(); else listarClientes();
+});
+document.getElementById("btnSair").addEventListener("click", ()=>{
+  localStorage.removeItem("token");
+  localStorage.removeItem("vendedorId");
+  localStorage.removeItem("vendedorNome");
+  localStorage.removeItem("vendedorRole");
+  window.location.href = "login.html";
+});
+window.addEventListener("online", sincronizar);
+listarClientesNuvem().catch(()=>listarClientes());
+</script>
+</body>
+</html>

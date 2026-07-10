@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+  <title>Gestão Vovó Maria · Login</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:linear-gradient(145deg,#FFF7ED,#FFEFE0);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:22px}
+    .card{max-width:440px;width:100%;background:rgba(255,255,255,.96);border-radius:36px;padding:28px;box-shadow:0 24px 45px -16px rgba(0,0,0,.25);text-align:center;border:1px solid rgba(249,115,22,.22)}
+    .logo{width:190px;max-width:75%;display:block;margin:0 auto 14px}
+    h1{font-size:24px;color:#78350F;margin-bottom:4px}
+    .sub{color:#9A3412;font-size:13px;margin-bottom:24px}
+    .group{text-align:left;margin-bottom:16px}
+    label{font-weight:700;color:#6B2E0E;font-size:14px;margin-left:8px;display:block;margin-bottom:7px}
+    input{width:100%;padding:14px 18px;border:2px solid #FCD8AF;border-radius:999px;font-size:16px;outline:none}
+    input:focus{border-color:#F97316;box-shadow:0 0 0 3px rgba(249,115,22,.18)}
+    button{width:100%;border:0;border-radius:999px;padding:14px;font-weight:800;font-size:17px;cursor:pointer;background:#EA580C;color:white;margin-top:6px}
+    button:active{transform:scale(.98)}
+    .msg{margin-top:16px;border-radius:18px;padding:12px;font-size:13px;display:none}
+    .ok{background:#D1FAE5;color:#065F46;display:block}
+    .err{background:#FEE2E2;color:#991B1B;display:block}
+    .note{margin-top:18px;font-size:11px;color:#B45309}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <img src="images/logo-vm-gestao.png" class="logo" alt="Gestão Vovó Maria">
+    <h1>Gestão Vovó Maria</h1>
+    <div class="sub">Software de Gestão Comercial</div>
+
+    <form id="loginForm">
+      <div class="group">
+        <label>E-mail</label>
+        <input type="email" id="email" autocomplete="username" required>
+      </div>
+      <div class="group">
+        <label>Senha</label>
+        <input type="password" id="senha" autocomplete="current-password" required>
+      </div>
+      <button type="submit">Entrar no sistema →</button>
+    </form>
+    <div id="msg" class="msg"></div>
+    <div class="note">© 2026 BeneOdir · Gestão Vovó Maria</div>
+  </div>
+
+<script>
+const API_URL = "https://gestaovvomaria-api.odir-bene12.workers.dev";
+
+function setMsg(texto, tipo){
+  const el = document.getElementById("msg");
+  el.textContent = texto;
+  el.className = "msg " + tipo;
+}
+
+document.getElementById("loginForm").addEventListener("submit", async (e)=>{
+  e.preventDefault();
+  const email = document.getElementById("email").value.trim();
+  const senha = document.getElementById("senha").value;
+
+  try{
+    const resp = await fetch(`${API_URL}/api/login`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ email, senha })
+    });
+    const data = await resp.json();
+    if(!resp.ok) throw new Error(data.error || "Erro no login");
+
+    localStorage.setItem("token", data.token);
+    localStorage.setItem("vendedorId", data.vendedor.id);
+    localStorage.setItem("vendedorNome", data.vendedor.nome);
+    localStorage.setItem("vendedorRole", data.vendedor.role);
+
+    setMsg("Login realizado com sucesso.", "ok");
+    setTimeout(()=>{ window.location.href = "dashboard.html"; }, 600);
+  }catch(err){
+    setMsg(err.message, "err");
+  }
+});
+</script>
+</body>
+</html>

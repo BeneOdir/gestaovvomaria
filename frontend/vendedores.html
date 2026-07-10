@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gestão Vovó Maria · Vendedores</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Segoe UI,system-ui,sans-serif;background:#F5F0E8;color:#431407;padding:16px}
+    .app{max-width:720px;margin:0 auto;background:white;border-radius:24px;padding:18px;box-shadow:0 8px 22px rgba(0,0,0,.10)}
+    .top{display:flex;gap:12px;align-items:center;margin-bottom:16px}
+    .logo{width:70px;height:70px;object-fit:contain}
+    h1{font-size:22px;color:#78350F}
+    .sub{font-size:13px;color:#B45309}
+    .status{margin:14px 0;padding:12px;border-radius:16px;background:#FEF3C7;color:#92400E;text-align:center;font-size:14px}
+    .ok{background:#D1FAE5;color:#065F46}
+    .err{background:#FEE2E2;color:#991B1B}
+    label{display:block;margin:10px 0 5px 8px;font-weight:800;font-size:13px;color:#7C2D12}
+    input,select{width:100%;padding:13px;border:2px solid #FCD8AF;border-radius:22px;font-size:15px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .btn{width:100%;border:0;border-radius:999px;padding:14px;font-weight:900;margin-top:12px;cursor:pointer}
+    .primary{background:#EA580C;color:white}
+    .dark{background:#7C2D12;color:white}
+    .soft{background:#FED7AA;color:#7C2D12}
+    .muted{background:#E7E5E4;color:#44403C}
+    .card{border:1px solid #FED7AA;background:#FFF7ED;border-radius:18px;padding:12px;margin-top:12px}
+    .card strong{color:#EA580C}
+    .pill{display:inline-block;margin-top:6px;margin-right:5px;padding:4px 10px;border-radius:999px;background:#FFEDD5;color:#9A3412;font-size:12px;font-weight:800}
+    .actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    @media(max-width:620px){.grid,.actions{grid-template-columns:1fr}.top{flex-direction:column;text-align:center}.logo{width:110px;height:110px}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <img src="images/logo-vm-gestao.png" class="logo" alt="Vovó Maria">
+    <div>
+      <h1>Cadastro de Vendedores</h1>
+      <div class="sub">Gestão Comercial Vovó Maria</div>
+      <div class="sub" id="userInfo"></div>
+    </div>
+  </div>
+
+  <div id="status" class="status">Cadastre ou gerencie vendedores.</div>
+
+  <form id="formVendedor">
+    <input type="hidden" id="vendedor_id">
+
+    <label>Nome *</label>
+    <input id="nome" placeholder="Nome do vendedor">
+
+    <label>E-mail *</label>
+    <input id="email" type="email" placeholder="email@exemplo.com">
+
+    <label>Senha inicial *</label>
+    <input id="senha" type="text" placeholder="Ex.: vendedor123">
+
+    <div class="grid">
+      <div>
+        <label>Perfil</label>
+        <select id="role">
+          <option value="vendedor">Vendedor</option>
+          <option value="admin">Administrador</option>
+        </select>
+      </div>
+      <div>
+        <label>Status</label>
+        <select id="status_vendedor">
+          <option value="ativo">Ativo</option>
+          <option value="inativo">Inativo</option>
+        </select>
+      </div>
+    </div>
+
+    <button class="btn primary" type="submit">Salvar vendedor</button>
+  </form>
+
+  <div class="actions">
+    <button class="btn dark" id="btnListar" type="button">Atualizar lista</button>
+    <button class="btn muted" id="btnVoltar" type="button">Voltar</button>
+  </div>
+
+  <div id="lista"></div>
+</div>
+
+<script>
+const API_URL = "https://gestaovvomaria-api.odir-bene12.workers.dev";
+
+const token = localStorage.getItem("token");
+const vendedorNome = localStorage.getItem("vendedorNome") || "Usuário";
+const vendedorRole = localStorage.getItem("vendedorRole") || "";
+
+if(!token){
+  alert("Faça login primeiro.");
+  window.location.href = "login.html";
+}
+
+document.getElementById("userInfo").textContent = "Logado como: " + vendedorNome;
+
+function setStatus(msg, tipo="warn"){
+  const el = document.getElementById("status");
+  el.textContent = msg;
+  el.className = "status " + (tipo === "ok" ? "ok" : tipo === "err" ? "err" : "");
+}
+
+function headers(){
+  return {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer " + token
+  };
+}
+
+async function listarVendedores(){
+  setStatus("Carregando vendedores...");
+  try{
+    const resp = await fetch(`${API_URL}/api/vendedores`, {
+      headers: { "Authorization": "Bearer " + token }
+    });
+
+    const data = await resp.json();
+
+    if(!resp.ok){
+      throw new Error(data.error || "Erro ao listar vendedores.");
+    }
+
+    const lista = document.getElementById("lista");
+
+    if(!data.length){
+      lista.innerHTML = `<div class="card">Nenhum vendedor cadastrado.</div>`;
+      setStatus("Nenhum vendedor encontrado.", "ok");
+      return;
+    }
+
+    lista.innerHTML = data.map(v => `
+      <div class="card">
+        <strong>${v.nome}</strong><br>
+        ${v.email}<br>
+        <span class="pill">${v.role || "vendedor"}</span>
+        <span class="pill">${v.status || "ativo"}</span>
+        <button class="btn soft" onclick='editar(${JSON.stringify(v)})'>Editar</button>
+      </div>
+    `).join("");
+
+    setStatus(`${data.length} vendedor(es) encontrado(s).`, "ok");
+
+  }catch(err){
+    setStatus(err.message, "err");
+  }
+}
+
+function editar(v){
+  document.getElementById("vendedor_id").value = v.id;
+  document.getElementById("nome").value = v.nome || "";
+  document.getElementById("email").value = v.email || "";
+  document.getElementById("senha").value = "";
+  document.getElementById("role").value = v.role || "vendedor";
+  document.getElementById("status_vendedor").value = v.status || "ativo";
+  setStatus("Editando vendedor ID " + v.id);
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+
+document.getElementById("formVendedor").addEventListener("submit", async (e)=>{
+  e.preventDefault();
+
+  const id = document.getElementById("vendedor_id").value;
+
+  const payload = {
+    nome: document.getElementById("nome").value.trim(),
+    email: document.getElementById("email").value.trim(),
+    senha: document.getElementById("senha").value.trim(),
+    role: document.getElementById("role").value,
+    status: document.getElementById("status_vendedor").value
+  };
+
+  if(!payload.nome || !payload.email || (!id && !payload.senha)){
+    setStatus("Nome, e-mail e senha são obrigatórios.", "err");
+    return;
+  }
+
+  try{
+    const url = id ? `${API_URL}/api/vendedores/${id}` : `${API_URL}/api/vendedores`;
+    const method = id ? "PUT" : "POST";
+
+    const resp = await fetch(url, {
+      method,
+      headers: headers(),
+      body: JSON.stringify(payload)
+    });
+
+    const data = await resp.json();
+
+    if(!resp.ok){
+      throw new Error(data.error || "Erro ao salvar vendedor.");
+    }
+
+    setStatus("Vendedor salvo com sucesso.", "ok");
+    document.getElementById("formVendedor").reset();
+    document.getElementById("vendedor_id").value = "";
+    await listarVendedores();
+
+  }catch(err){
+    setStatus(err.message, "err");
+  }
+});
+
+document.getElementById("btnListar").addEventListener("click", listarVendedores);
+document.getElementById("btnVoltar").addEventListener("click", ()=> window.location.href = "dashboard.html");
+
+listarVendedores();
+</script>
+</body>
+</html>
