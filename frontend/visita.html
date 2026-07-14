@@ -217,7 +217,7 @@
         <input
           id="buscaCliente"
           type="search"
-          placeholder="Nome, CNPJ/CPF, cidade, telefone..."
+          placeholder="Ex.: Bom Jesus, CPA, Várzea Grande..."
           autocomplete="off">
       </div>
 
@@ -395,21 +395,30 @@ function nomeCliente(c){
   return c.nome_fantasia || c.razao_social || c.nome_estabelecimento || "Cliente";
 }
 
+function bairroCliente(c){
+  const bairroDireto = String(c.bairro || c.localizacao || "").trim();
+  if(bairroDireto) return bairroDireto;
+
+  const endereco = String(c.endereco || "").trim();
+  if(!endereco) return "";
+
+  const comPalavraBairro = endereco.match(/\bbairro\s*[:\-]?\s*([^,;]+)/i);
+  if(comPalavraBairro) return comPalavraBairro[1].trim();
+
+  const partes = endereco.split(",").map(p => p.trim()).filter(Boolean);
+  if(partes.length >= 3){
+    return partes[partes.length - 1].replace(/^bairro\s*/i, "").trim();
+  }
+
+  return "";
+}
+
 function identificacaoCliente(c){
   const nome = nomeCliente(c);
-  const cidade = [c.cidade, c.estado].filter(Boolean).join("/");
-  const endereco = String(c.endereco || "").trim();
-  const documento = apenasNumeros(c.documento || c.cnpj || c.cpf);
-  const finalDocumento = documento ? documento.slice(-4) : "";
-  const vendedor = String(c.vendedor_nome || "").trim();
+  const bairro = bairroCliente(c);
+  const cidade = String(c.cidade || "").trim();
 
-  return [
-    nome,
-    cidade,
-    endereco,
-    finalDocumento ? "Doc. final " + finalDocumento : "",
-    vendedor ? "Cad.: " + vendedor : ""
-  ].filter(Boolean).join(" · ");
+  return [nome, bairro, cidade].filter(Boolean).join(" • ");
 }
 
 function textoCliente(c){
@@ -516,20 +525,9 @@ function mostrarResumoCliente(){
     return;
   }
 
-  const documento = c.documento || c.cnpj || c.cpf || "";
-  const telefone = c.whatsapp || c.telefone || "";
-
   box.innerHTML = `
-    <strong>${nomeCliente(c)}</strong><br>
-    ${documento ? `Documento: ${documento}<br>` : ""}
-    ${c.cidade || c.estado ? `Local: ${c.cidade || ""}/${c.estado || ""}<br>` : ""}
-    ${c.endereco ? `Endereço: ${c.endereco}<br>` : ""}
-    ${telefone ? `Contato: ${telefone}<br>` : ""}
-    ${c.responsavel_compra ? `Comprador: ${c.responsavel_compra}<br>` : ""}
-    ${c.vendedor_nome ? `Cadastro original: ${c.vendedor_nome}<br>` : ""}
-    ${c.ultima_visita ? `Última visita: ${c.ultima_visita}<br>` : ""}
-    <span class="pill">${c.status_comercial || "prospect"}</span>
-    <span class="pill">${c.status_cliente || "ativo"}</span>
+    <strong>✅ Cliente selecionado</strong><br>
+    ${identificacaoCliente(c)}
   `;
 
   box.style.display = "block";
