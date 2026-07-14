@@ -124,6 +124,28 @@
       margin:14px 0
     }
     .client-summary{display:none}
+    .quick-register{
+      display:none;
+      margin-top:12px;
+      padding:14px;
+      border-radius:20px;
+      background:#FFF7ED;
+      border:2px dashed #FB923C
+    }
+    .quick-title{
+      font-weight:900;
+      color:#78350F;
+      margin-bottom:10px;
+      text-align:center
+    }
+    .search-result{
+      margin-top:8px;
+      font-size:12px;
+      font-weight:800;
+      color:#7C2D12;
+      text-align:center
+    }
+    .success{background:#047857;color:white}
     .item{
       border:1px solid #FED7AA;
       border-radius:18px;
@@ -206,6 +228,60 @@
         </select>
       </div>
 
+      <div id="resultadoBusca" class="search-result"></div>
+
+      <button type="button" class="btn success" id="btnNovoCliente">
+        ➕ Não encontrou? Cadastrar novo cliente
+      </button>
+
+      <div id="cadastroRapido" class="quick-register">
+        <div class="quick-title">Cadastro rápido do cliente</div>
+
+        <div class="grid2">
+          <div class="group">
+            <label>Tipo *</label>
+            <select id="novo_tipo">
+              <option value="PJ">Pessoa Jurídica / CNPJ</option>
+              <option value="PF">Pessoa Física / CPF</option>
+            </select>
+          </div>
+          <div class="group">
+            <label id="labelNovoDocumento">CNPJ *</label>
+            <input id="novo_documento" inputmode="numeric" placeholder="Somente números">
+          </div>
+        </div>
+
+        <div class="group">
+          <label>Nome fantasia / Identificação *</label>
+          <input id="novo_nome" placeholder="Ex.: Mercado São José">
+        </div>
+
+        <div class="grid2">
+          <div class="group">
+            <label>Telefone / WhatsApp</label>
+            <input id="novo_telefone" inputmode="tel" placeholder="(65) 99999-9999">
+          </div>
+          <div class="group">
+            <label>Cidade *</label>
+            <input id="novo_cidade" placeholder="Cuiabá">
+          </div>
+        </div>
+
+        <div class="group">
+          <label>Estado *</label>
+          <input id="novo_estado" maxlength="2" value="MT" placeholder="MT">
+        </div>
+
+        <div class="actions">
+          <button type="button" class="btn primary" id="btnSalvarNovoCliente">
+            Salvar e continuar venda
+          </button>
+          <button type="button" class="btn muted" id="btnCancelarNovoCliente">
+            Cancelar
+          </button>
+        </div>
+      </div>
+
       <div id="clienteResumo" class="card client-summary"></div>
     </div>
 
@@ -247,6 +323,7 @@
 const API_URL = "https://gestaovvomaria-api.odir-bene12.workers.dev";
 
 const token = localStorage.getItem("token");
+const vendedorId = localStorage.getItem("vendedorId");
 const vendedorNome = localStorage.getItem("vendedorNome") || "Usuário";
 
 if(!token){
@@ -305,7 +382,10 @@ async function api(path, opts={}){
       alert("Sua sessão expirou. Faça login novamente.");
       location.href = "login.html";
     }
-    throw new Error(data.error || "Erro na API");
+    const erro = new Error(data.error || "Erro na API");
+    erro.status = resp.status;
+    erro.data = data;
+    throw erro;
   }
 
   return data;
@@ -313,6 +393,23 @@ async function api(path, opts={}){
 
 function nomeCliente(c){
   return c.nome_fantasia || c.razao_social || c.nome_estabelecimento || "Cliente";
+}
+
+function identificacaoCliente(c){
+  const nome = nomeCliente(c);
+  const cidade = [c.cidade, c.estado].filter(Boolean).join("/");
+  const endereco = String(c.endereco || "").trim();
+  const documento = apenasNumeros(c.documento || c.cnpj || c.cpf);
+  const finalDocumento = documento ? documento.slice(-4) : "";
+  const vendedor = String(c.vendedor_nome || "").trim();
+
+  return [
+    nome,
+    cidade,
+    endereco,
+    finalDocumento ? "Doc. final " + finalDocumento : "",
+    vendedor ? "Cad.: " + vendedor : ""
+  ].filter(Boolean).join(" · ");
 }
 
 function textoCliente(c){
@@ -344,7 +441,7 @@ function renderizarClientes(lista, manterSelecionado=true){
     `<option value="">Selecione...</option>` +
     ordenada.map(c => `
       <option value="${c.id}">
-        ${nomeCliente(c)}${c.cidade ? " - " + c.cidade + "/" + (c.estado || "") : ""}
+        ${identificacaoCliente(c)}
       </option>
     `).join("");
 
@@ -354,6 +451,21 @@ function renderizarClientes(lista, manterSelecionado=true){
 
   if(!ordenada.length){
     select.innerHTML = `<option value="">Nenhum cliente encontrado</option>`;
+  }
+
+  atualizarResultadoBusca(ordenada.length);
+}
+
+function atualizarResultadoBusca(qtd){
+  const termo = document.getElementById("buscaCliente").value.trim();
+  const box = document.getElementById("resultadoBusca");
+
+  if(!termo){
+    box.textContent = `${clientes.length} cliente(s) disponível(is).`;
+  }else if(qtd === 0){
+    box.textContent = "Nenhum cliente encontrado. Cadastre e continue a venda.";
+  }else{
+    box.textContent = `${qtd} cliente(s) encontrado(s).`;
   }
 }
 
@@ -378,6 +490,13 @@ function filtrarClientes(){
   });
 
   renderizarClientes(filtrados, false);
+
+  if(filtrados.length === 1){
+    document.getElementById("cliente_id").value = String(filtrados[0].id);
+    mostrarResumoCliente();
+  }else{
+    document.getElementById("clienteResumo").style.display = "none";
+  }
 }
 
 function mostrarResumoCliente(){
@@ -404,14 +523,160 @@ function mostrarResumoCliente(){
     <strong>${nomeCliente(c)}</strong><br>
     ${documento ? `Documento: ${documento}<br>` : ""}
     ${c.cidade || c.estado ? `Local: ${c.cidade || ""}/${c.estado || ""}<br>` : ""}
+    ${c.endereco ? `Endereço: ${c.endereco}<br>` : ""}
     ${telefone ? `Contato: ${telefone}<br>` : ""}
     ${c.responsavel_compra ? `Comprador: ${c.responsavel_compra}<br>` : ""}
+    ${c.vendedor_nome ? `Cadastro original: ${c.vendedor_nome}<br>` : ""}
     ${c.ultima_visita ? `Última visita: ${c.ultima_visita}<br>` : ""}
     <span class="pill">${c.status_comercial || "prospect"}</span>
     <span class="pill">${c.status_cliente || "ativo"}</span>
   `;
 
   box.style.display = "block";
+}
+
+
+function abrirCadastroRapido(){
+  const painel = document.getElementById("cadastroRapido");
+  painel.style.display = "block";
+
+  const termo = document.getElementById("buscaCliente").value.trim();
+  if(termo && !document.getElementById("novo_nome").value){
+    document.getElementById("novo_nome").value = termo;
+  }
+
+  painel.scrollIntoView({behavior:"smooth", block:"center"});
+}
+
+function fecharCadastroRapido(){
+  document.getElementById("cadastroRapido").style.display = "none";
+  document.getElementById("novo_documento").value = "";
+  document.getElementById("novo_nome").value = "";
+  document.getElementById("novo_telefone").value = "";
+  document.getElementById("novo_cidade").value = "";
+  document.getElementById("novo_estado").value = "MT";
+}
+
+function atualizarTipoNovoCliente(){
+  const tipo = document.getElementById("novo_tipo").value;
+  document.getElementById("labelNovoDocumento").textContent =
+    tipo === "PJ" ? "CNPJ *" : "CPF *";
+}
+
+async function salvarNovoCliente(){
+  const tipo = document.getElementById("novo_tipo").value;
+  const documento = apenasNumeros(document.getElementById("novo_documento").value);
+  const nome = document.getElementById("novo_nome").value.trim();
+  const telefone = apenasNumeros(document.getElementById("novo_telefone").value);
+  const cidade = document.getElementById("novo_cidade").value.trim();
+  const estado = document.getElementById("novo_estado").value.trim().toUpperCase();
+
+  const documentoValido =
+    (tipo === "PJ" && documento.length === 14) ||
+    (tipo === "PF" && documento.length === 11);
+
+  if(!documentoValido){
+    setStatus(tipo === "PJ" ? "Informe um CNPJ válido." : "Informe um CPF válido.", "err");
+    return;
+  }
+  if(!nome){
+    setStatus("Informe o nome ou identificação do cliente.", "err");
+    return;
+  }
+  if(!cidade || !estado){
+    setStatus("Informe cidade e estado.", "err");
+    return;
+  }
+
+  const existenteLocal = clientes.find(c =>
+    apenasNumeros(c.documento || c.cnpj || c.cpf) === documento
+  );
+
+  if(existenteLocal){
+    document.getElementById("buscaCliente").value = nomeCliente(existenteLocal);
+    renderizarClientes(clientes, false);
+    document.getElementById("cliente_id").value = String(existenteLocal.id);
+    mostrarResumoCliente();
+    fecharCadastroRapido();
+    setStatus("Cliente já cadastrado e selecionado.", "warn");
+    return;
+  }
+
+  const body = {
+    vendedor_id: vendedorId,
+    tipo_pessoa: tipo,
+    documento,
+    cnpj: tipo === "PJ" ? documento : "",
+    cpf: tipo === "PF" ? documento : "",
+    razao_social: nome,
+    nome_estabelecimento: nome,
+    nome_fantasia: nome,
+    ie: "",
+    situacao_ie: "pendente",
+    responsavel_empresa: "",
+    responsavel_compra: "",
+    telefone,
+    whatsapp: telefone,
+    instagram: "",
+    email: "",
+    contato_emergencia: "",
+    cep: "",
+    endereco: "",
+    cidade,
+    estado,
+    concorrentes: "",
+    observacoes_gerais: "Cadastro rápido realizado durante visita/venda.",
+    status_comercial: "prospect",
+    status_cliente: "ativo",
+    ultima_visita: ""
+  };
+
+  try{
+    setStatus("Salvando novo cliente...", "warn");
+
+    const retorno = await api("/api/clientes", {
+      method:"POST",
+      body:JSON.stringify(body)
+    });
+
+    const novoCliente = {
+      ...body,
+      ...(retorno.cliente || {}),
+      id: retorno.id || retorno.cliente?.id
+    };
+
+    if(!novoCliente.id){
+      throw new Error("Cliente salvo, mas a API não retornou o ID.");
+    }
+
+    clientes.push(novoCliente);
+    document.getElementById("buscaCliente").value = nomeCliente(novoCliente);
+    renderizarClientes(clientes, false);
+    document.getElementById("cliente_id").value = String(novoCliente.id);
+    mostrarResumoCliente();
+    fecharCadastroRapido();
+
+    setStatus("Cliente cadastrado e selecionado. Continue a venda.", "ok");
+  }catch(err){
+    if(err.status === 409){
+      clientes = await api("/api/clientes");
+      const encontrado = clientes.find(c =>
+        apenasNumeros(c.documento || c.cnpj || c.cpf) === documento
+      );
+
+      if(encontrado){
+        document.getElementById("buscaCliente").value = nomeCliente(encontrado);
+        renderizarClientes(clientes, false);
+        document.getElementById("cliente_id").value = String(encontrado.id);
+        mostrarResumoCliente();
+        fecharCadastroRapido();
+        setStatus("Cliente já existia e foi selecionado.", "warn");
+        return;
+      }
+    }
+
+    setStatus(err.message, "err");
+  }
 }
 
 function optionProdutos(){
@@ -547,6 +812,12 @@ async function carregar(){
 
 document.getElementById("buscaCliente").addEventListener("input", filtrarClientes);
 document.getElementById("cliente_id").addEventListener("change", mostrarResumoCliente);
+
+document.getElementById("btnNovoCliente").addEventListener("click", abrirCadastroRapido);
+document.getElementById("btnCancelarNovoCliente").addEventListener("click", fecharCadastroRapido);
+document.getElementById("btnSalvarNovoCliente").addEventListener("click", salvarNovoCliente);
+document.getElementById("novo_tipo").addEventListener("change", atualizarTipoNovoCliente);
+
 document.getElementById("btnAddItem").addEventListener("click", addItem);
 
 document.getElementById("comprou").addEventListener("change", function(){
@@ -623,6 +894,7 @@ document.getElementById("btnSair").addEventListener("click", () => {
   location.href = "login.html";
 });
 
+atualizarTipoNovoCliente();
 carregar();
 </script>
 </body>
