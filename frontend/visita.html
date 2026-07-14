@@ -1,19 +1,629 @@
-<!DOCTYPE html><html lang="pt-br"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Gestão Vovó Maria · Visita/Venda</title><style>
-*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',system-ui,sans-serif;background:#F5F0E8;padding:18px;color:#431407}.container{max-width:760px;margin:0 auto;background:white;border-radius:28px;padding:20px;box-shadow:0 10px 24px rgba(0,0,0,.10)}.top{display:flex;align-items:center;gap:14px;margin-bottom:16px}.logo{width:82px;height:82px;object-fit:contain;border-radius:20px}h1{font-size:22px;color:#78350F}.sub{font-size:12px;color:#B45309;margin-top:2px}.status{padding:11px 13px;border-radius:16px;background:#FEF3C7;margin:12px 0 18px;font-size:13px;text-align:center;color:#92400E}.status.ok{background:#D1FAE5;color:#065F46}.status.err{background:#FEE2E2;color:#991B1B}.status.warn{background:#FEF3C7;color:#92400E}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.group{margin-bottom:13px}label{display:block;font-size:13px;font-weight:800;color:#6B2E0E;margin:0 0 6px 7px}input,select,textarea{width:100%;padding:12px 14px;border:2px solid #FCD8AF;border-radius:22px;font-size:14px;outline:none;background:white}textarea{border-radius:18px;resize:vertical}input:focus,select:focus,textarea:focus{border-color:#F97316;box-shadow:0 0 0 3px rgba(249,115,22,.12)}.btn{width:100%;border:0;border-radius:999px;padding:13px;font-weight:900;cursor:pointer;margin-top:8px}.primary{background:#EA580C;color:white}.dark{background:#7C2D12;color:white}.soft{background:#FED7AA;color:#7C2D12}.muted{background:#E7E5E4;color:#44403C}.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}.card{border:1px solid #FED7AA;border-radius:18px;padding:12px;margin-top:12px;background:#FFF7ED;font-size:13px}.card strong{color:#EA580C}.pill{display:inline-block;padding:3px 9px;border-radius:999px;background:#FFEDD5;color:#9A3412;font-size:11px;font-weight:800;margin-top:5px}.small{font-size:12px;color:#78716C}@media(max-width:620px){.grid2,.actions{grid-template-columns:1fr}.top{flex-direction:column;text-align:center}.logo{width:130px;height:130px}}
-</style></head><body><div class="container"><div class="top"><img src="images/logo-vm-gestao.png" class="logo" alt="Gestão Vovó Maria"><div><h1>Registrar visita / venda</h1><div class="sub">Uso diário do vendedor · V1 provisória</div><div class="small" id="userInfo"></div></div></div><div id="statusMsg" class="status">Selecione um cliente e registre o resultado da visita.</div><div class="actions"><button class="btn soft" onclick="location.href='clientes.html'">Clientes</button><button class="btn dark" onclick="location.href='relatorio-dia.html'">Relatório do dia</button></div><form id="visitaForm"><div class="grid2"><div class="group"><label>Data da visita</label><input id="data_visita" type="date"></div><div class="group"><label>Cliente *</label><select id="cliente_id"><option value="">Carregando clientes...</option></select></div></div><div class="grid2"><div class="group"><label>Comprou?</label><select id="comprou"><option value="sim">Sim</option><option value="nao">Não</option></select></div><div class="group"><label>Observação rápida</label><input id="observacoes" placeholder="Ex.: pediu retorno, sem espaço, comprou pouco..."></div></div><h3 style="margin:12px 0;color:#78350F">Produtos</h3><div id="itens"></div><button type="button" class="btn soft" id="btnAddItem">+ Adicionar produto</button><button class="btn primary" type="submit">Salvar visita/venda</button></form><div id="resumo" class="card"></div><button class="btn muted" id="btnSair" type="button">Sair</button></div><script>
-const API_URL='https://gestaovvomaria-api.odir-bene12.workers.dev';
-const token=localStorage.getItem('token'); const vendedorNome=localStorage.getItem('vendedorNome')||'Usuário';
-if(!token){alert('Faça login primeiro.'); location.href='login.html';}
-document.getElementById('userInfo').textContent='Logado como: '+vendedorNome;
-const hoje=new Date().toISOString().slice(0,10); document.getElementById('data_visita').value=hoje;
-let produtos=[];
-function setStatus(msg,tipo='warn'){const el=document.getElementById('statusMsg');el.textContent=msg;el.className='status '+tipo;}
-function dinheiro(v){return Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}
-async function api(path,opts={}){const r=await fetch(API_URL+path,{...opts,headers:{'Content-Type':'application/json','Authorization':'Bearer '+token,...(opts.headers||{})}}); const d=await r.json().catch(()=>({})); if(!r.ok) throw new Error(d.error||'Erro na API'); return d;}
-async function carregar(){try{const clientes=await api('/api/clientes'); const sel=document.getElementById('cliente_id'); sel.innerHTML='<option value="">Selecione...</option>'+clientes.map(c=>`<option value="${c.id}">${c.nome_fantasia||c.razao_social||'Cliente'} - ${c.cidade||''}/${c.estado||''}</option>`).join(''); produtos=await api('/api/produtos'); addItem(); setStatus('Clientes e produtos carregados.','ok');}catch(e){setStatus(e.message,'err')}}
-function addItem(){const div=document.createElement('div'); div.className='grid2 item'; div.innerHTML=`<div class="group"><label>Produto</label><select class="produto"><option value="">Selecione...</option>${produtos.map(p=>`<option value="${p.id}" data-preco="${p.preco_padrao||0}">${p.nome}</option>`).join('')}</select></div><div class="grid2"><div class="group"><label>Qtd fardos</label><input class="qtd" type="number" step="0.5" min="0" placeholder="0"></div><div class="group"><label>Preço unit.</label><input class="preco" type="number" step="0.01" min="0" placeholder="0,00"></div></div>`; document.getElementById('itens').appendChild(div); div.querySelector('.produto').addEventListener('change',e=>{const opt=e.target.selectedOptions[0]; div.querySelector('.preco').value=opt?.dataset?.preco||0;})}
-document.getElementById('btnAddItem').onclick=addItem;
-document.getElementById('visitaForm').addEventListener('submit',async e=>{e.preventDefault(); const itens=[...document.querySelectorAll('.item')].map(div=>{const sel=div.querySelector('.produto'); const opt=sel.selectedOptions[0]; return {produto_id:sel.value, produto_nome:opt?opt.textContent:'', quantidade:div.querySelector('.qtd').value, preco_unitario:div.querySelector('.preco').value}}).filter(i=>Number(i.quantidade)>0); const body={cliente_id:document.getElementById('cliente_id').value,data_visita:document.getElementById('data_visita').value,comprou:document.getElementById('comprou').value,observacoes:document.getElementById('observacoes').value,itens}; try{const d=await api('/api/visitas',{method:'POST',body:JSON.stringify(body)}); setStatus('Visita registrada com sucesso.','ok'); document.getElementById('resumo').innerHTML=`<strong>Registro salvo</strong><br>ID: ${d.visita_id}<br>Total estimado: ${dinheiro(d.valor_total)}<br>Itens: ${d.itens}`; document.getElementById('visitaForm').reset(); document.getElementById('data_visita').value=hoje; document.getElementById('itens').innerHTML=''; addItem();}catch(err){setStatus(err.message,'err')}});
-document.getElementById('btnSair').onclick=()=>{localStorage.clear(); location.href='login.html'};
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Gestão Vovó Maria · Visita/Venda</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{
+      font-family:'Segoe UI',system-ui,sans-serif;
+      background:#F5F0E8;
+      padding:18px;
+      color:#431407
+    }
+    .container{
+      max-width:760px;
+      margin:0 auto;
+      background:white;
+      border-radius:28px;
+      padding:20px;
+      box-shadow:0 10px 24px rgba(0,0,0,.10)
+    }
+    .top{
+      display:flex;
+      align-items:center;
+      gap:14px;
+      margin-bottom:16px
+    }
+    .logo{
+      width:82px;
+      height:82px;
+      object-fit:contain;
+      border-radius:20px
+    }
+    h1{font-size:22px;color:#78350F}
+    h3{margin:12px 0;color:#78350F}
+    .sub{font-size:12px;color:#B45309;margin-top:2px}
+    .small{font-size:12px;color:#78716C}
+    .status{
+      padding:11px 13px;
+      border-radius:16px;
+      background:#FEF3C7;
+      margin:12px 0 18px;
+      font-size:13px;
+      text-align:center;
+      color:#92400E
+    }
+    .status.ok{background:#D1FAE5;color:#065F46}
+    .status.err{background:#FEE2E2;color:#991B1B}
+    .status.warn{background:#FEF3C7;color:#92400E}
+    .grid2{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:12px
+    }
+    .group{margin-bottom:13px}
+    label{
+      display:block;
+      font-size:13px;
+      font-weight:800;
+      color:#6B2E0E;
+      margin:0 0 6px 7px
+    }
+    input,select,textarea{
+      width:100%;
+      padding:12px 14px;
+      border:2px solid #FCD8AF;
+      border-radius:22px;
+      font-size:14px;
+      outline:none;
+      background:white
+    }
+    textarea{
+      border-radius:18px;
+      resize:vertical
+    }
+    input:focus,select:focus,textarea:focus{
+      border-color:#F97316;
+      box-shadow:0 0 0 3px rgba(249,115,22,.12)
+    }
+    .btn{
+      width:100%;
+      border:0;
+      border-radius:999px;
+      padding:13px;
+      font-weight:900;
+      cursor:pointer;
+      margin-top:8px
+    }
+    .primary{background:#EA580C;color:white}
+    .dark{background:#7C2D12;color:white}
+    .soft{background:#FED7AA;color:#7C2D12}
+    .muted{background:#E7E5E4;color:#44403C}
+    .actions{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:10px;
+      margin-top:8px
+    }
+    .card{
+      border:1px solid #FED7AA;
+      border-radius:18px;
+      padding:12px;
+      margin-top:12px;
+      background:#FFF7ED;
+      font-size:13px
+    }
+    .card strong{color:#EA580C}
+    .pill{
+      display:inline-block;
+      padding:3px 9px;
+      border-radius:999px;
+      background:#FFEDD5;
+      color:#9A3412;
+      font-size:11px;
+      font-weight:800;
+      margin:5px 5px 0 0
+    }
+    .search-box{
+      background:#FFFBEB;
+      border:1px solid #FED7AA;
+      border-radius:20px;
+      padding:14px;
+      margin:14px 0
+    }
+    .client-summary{display:none}
+    .item{
+      border:1px solid #FED7AA;
+      border-radius:18px;
+      padding:12px;
+      margin-bottom:12px;
+      background:#FFFDF8
+    }
+    .item-top{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:10px;
+      margin-bottom:8px
+    }
+    .remove-item{
+      border:0;
+      background:#FEE2E2;
+      color:#991B1B;
+      border-radius:999px;
+      padding:7px 11px;
+      font-weight:800;
+      cursor:pointer
+    }
+    .total-box{
+      margin-top:12px;
+      background:#FFF7ED;
+      border:1px solid #FED7AA;
+      border-radius:18px;
+      padding:13px;
+      font-weight:900;
+      color:#7C2D12;
+      text-align:center
+    }
+    @media(max-width:620px){
+      body{padding:10px}
+      .container{padding:16px;border-radius:22px}
+      .grid2,.actions{grid-template-columns:1fr}
+      .top{flex-direction:column;text-align:center}
+      .logo{width:120px;height:120px}
+      .btn{padding:15px}
+      input,select,textarea{font-size:16px}
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="top">
+    <img src="images/logo-vm-gestao.png" class="logo" alt="Gestão Vovó Maria">
+    <div>
+      <h1>Registrar visita / venda</h1>
+      <div class="sub">Uso diário do vendedor</div>
+      <div class="small" id="userInfo"></div>
+    </div>
+  </div>
+
+  <div id="statusMsg" class="status">
+    Pesquise e selecione um cliente para registrar a visita.
+  </div>
+
+  <div class="actions">
+    <button class="btn soft" type="button" onclick="location.href='clientes.html'">Clientes</button>
+    <button class="btn dark" type="button" onclick="location.href='relatorio-dia.html'">Relatório do dia</button>
+  </div>
+
+  <form id="visitaForm">
+    <div class="search-box">
+      <div class="group">
+        <label>🔎 Pesquisar cliente</label>
+        <input
+          id="buscaCliente"
+          type="search"
+          placeholder="Nome, CNPJ/CPF, cidade, telefone..."
+          autocomplete="off">
+      </div>
+
+      <div class="group">
+        <label>Cliente *</label>
+        <select id="cliente_id">
+          <option value="">Carregando clientes...</option>
+        </select>
+      </div>
+
+      <div id="clienteResumo" class="card client-summary"></div>
+    </div>
+
+    <div class="grid2">
+      <div class="group">
+        <label>Data da visita</label>
+        <input id="data_visita" type="date">
+      </div>
+      <div class="group">
+        <label>Comprou?</label>
+        <select id="comprou">
+          <option value="sim">Sim</option>
+          <option value="nao">Não</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="group">
+      <label>Observação rápida</label>
+      <input id="observacoes" placeholder="Ex.: pediu retorno, sem espaço, comprou pouco...">
+    </div>
+
+    <h3>Produtos</h3>
+    <div id="itens"></div>
+
+    <button type="button" class="btn soft" id="btnAddItem">+ Adicionar produto</button>
+
+    <div id="totalEstimado" class="total-box">Total estimado: R$ 0,00</div>
+
+    <button class="btn primary" type="submit">Salvar visita/venda</button>
+  </form>
+
+  <div id="resumo" class="card" style="display:none"></div>
+
+  <button class="btn muted" id="btnSair" type="button">Sair</button>
+</div>
+
+<script>
+const API_URL = "https://gestaovvomaria-api.odir-bene12.workers.dev";
+
+const token = localStorage.getItem("token");
+const vendedorNome = localStorage.getItem("vendedorNome") || "Usuário";
+
+if(!token){
+  alert("Faça login primeiro.");
+  location.href = "login.html";
+}
+
+document.getElementById("userInfo").textContent = "Logado como: " + vendedorNome;
+
+const hoje = new Date().toISOString().slice(0,10);
+document.getElementById("data_visita").value = hoje;
+
+let clientes = [];
+let produtos = [];
+
+function setStatus(msg, tipo="warn"){
+  const el = document.getElementById("statusMsg");
+  el.textContent = msg;
+  el.className = "status " + tipo;
+}
+
+function dinheiro(v){
+  return Number(v || 0).toLocaleString("pt-BR", {
+    style:"currency",
+    currency:"BRL"
+  });
+}
+
+function apenasNumeros(v){
+  return String(v || "").replace(/\D/g, "");
+}
+
+function normalizar(v){
+  return String(v || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+async function api(path, opts={}){
+  const resp = await fetch(API_URL + path, {
+    ...opts,
+    headers:{
+      "Content-Type":"application/json",
+      "Authorization":"Bearer " + token,
+      ...(opts.headers || {})
+    }
+  });
+
+  const data = await resp.json().catch(() => ({}));
+
+  if(!resp.ok){
+    if(resp.status === 401){
+      localStorage.removeItem("token");
+      alert("Sua sessão expirou. Faça login novamente.");
+      location.href = "login.html";
+    }
+    throw new Error(data.error || "Erro na API");
+  }
+
+  return data;
+}
+
+function nomeCliente(c){
+  return c.nome_fantasia || c.razao_social || c.nome_estabelecimento || "Cliente";
+}
+
+function textoCliente(c){
+  return normalizar([
+    c.nome_fantasia,
+    c.razao_social,
+    c.nome_estabelecimento,
+    c.documento,
+    c.cnpj,
+    c.cpf,
+    c.cidade,
+    c.estado,
+    c.telefone,
+    c.whatsapp,
+    c.instagram,
+    c.endereco
+  ].filter(Boolean).join(" "));
+}
+
+function renderizarClientes(lista, manterSelecionado=true){
+  const select = document.getElementById("cliente_id");
+  const selecionado = manterSelecionado ? select.value : "";
+
+  const ordenada = [...lista].sort((a,b) =>
+    nomeCliente(a).localeCompare(nomeCliente(b), "pt-BR")
+  );
+
+  select.innerHTML =
+    `<option value="">Selecione...</option>` +
+    ordenada.map(c => `
+      <option value="${c.id}">
+        ${nomeCliente(c)}${c.cidade ? " - " + c.cidade + "/" + (c.estado || "") : ""}
+      </option>
+    `).join("");
+
+  if(selecionado && ordenada.some(c => String(c.id) === String(selecionado))){
+    select.value = selecionado;
+  }
+
+  if(!ordenada.length){
+    select.innerHTML = `<option value="">Nenhum cliente encontrado</option>`;
+  }
+}
+
+function filtrarClientes(){
+  const termo = normalizar(document.getElementById("buscaCliente").value);
+
+  if(!termo){
+    renderizarClientes(clientes);
+    return;
+  }
+
+  const numeros = apenasNumeros(termo);
+
+  const filtrados = clientes.filter(c => {
+    const texto = textoCliente(c);
+    const documento = apenasNumeros(c.documento || c.cnpj || c.cpf);
+    const telefone = apenasNumeros(c.telefone || c.whatsapp);
+
+    return texto.includes(termo)
+      || (numeros && documento.includes(numeros))
+      || (numeros && telefone.includes(numeros));
+  });
+
+  renderizarClientes(filtrados, false);
+}
+
+function mostrarResumoCliente(){
+  const id = document.getElementById("cliente_id").value;
+  const box = document.getElementById("clienteResumo");
+
+  if(!id){
+    box.style.display = "none";
+    box.innerHTML = "";
+    return;
+  }
+
+  const c = clientes.find(item => String(item.id) === String(id));
+
+  if(!c){
+    box.style.display = "none";
+    return;
+  }
+
+  const documento = c.documento || c.cnpj || c.cpf || "";
+  const telefone = c.whatsapp || c.telefone || "";
+
+  box.innerHTML = `
+    <strong>${nomeCliente(c)}</strong><br>
+    ${documento ? `Documento: ${documento}<br>` : ""}
+    ${c.cidade || c.estado ? `Local: ${c.cidade || ""}/${c.estado || ""}<br>` : ""}
+    ${telefone ? `Contato: ${telefone}<br>` : ""}
+    ${c.responsavel_compra ? `Comprador: ${c.responsavel_compra}<br>` : ""}
+    ${c.ultima_visita ? `Última visita: ${c.ultima_visita}<br>` : ""}
+    <span class="pill">${c.status_comercial || "prospect"}</span>
+    <span class="pill">${c.status_cliente || "ativo"}</span>
+  `;
+
+  box.style.display = "block";
+}
+
+function optionProdutos(){
+  return produtos.map(p => `
+    <option
+      value="${p.id}"
+      data-preco="${Number(p.preco || p.preco_padrao || 0)}">
+      ${p.nome}
+    </option>
+  `).join("");
+}
+
+function addItem(){
+  const div = document.createElement("div");
+  div.className = "item";
+
+  div.innerHTML = `
+    <div class="item-top">
+      <strong>Item da venda</strong>
+      <button type="button" class="remove-item">Remover</button>
+    </div>
+
+    <div class="group">
+      <label>Produto</label>
+      <select class="produto">
+        <option value="">Selecione...</option>
+        ${optionProdutos()}
+      </select>
+    </div>
+
+    <div class="grid2">
+      <div class="group">
+        <label>Qtd. de fardos</label>
+        <input class="qtd" type="number" step="0.5" min="0" placeholder="0">
+      </div>
+      <div class="group">
+        <label>Preço unitário</label>
+        <input class="preco" type="number" step="0.01" min="0" placeholder="0,00">
+      </div>
+    </div>
+  `;
+
+  document.getElementById("itens").appendChild(div);
+
+  const produtoSelect = div.querySelector(".produto");
+  const qtdInput = div.querySelector(".qtd");
+  const precoInput = div.querySelector(".preco");
+
+  produtoSelect.addEventListener("change", () => {
+    const opt = produtoSelect.selectedOptions[0];
+    precoInput.value = opt?.dataset?.preco || 0;
+    atualizarTotal();
+  });
+
+  qtdInput.addEventListener("input", atualizarTotal);
+  precoInput.addEventListener("input", atualizarTotal);
+
+  div.querySelector(".remove-item").addEventListener("click", () => {
+    const totalItens = document.querySelectorAll(".item").length;
+
+    if(totalItens === 1){
+      produtoSelect.value = "";
+      qtdInput.value = "";
+      precoInput.value = "";
+    }else{
+      div.remove();
+    }
+
+    atualizarTotal();
+  });
+}
+
+function coletarItens(){
+  return [...document.querySelectorAll(".item")]
+    .map(div => {
+      const sel = div.querySelector(".produto");
+      const opt = sel.selectedOptions[0];
+
+      return {
+        produto_id: sel.value ? Number(sel.value) : null,
+        produto_nome: opt && sel.value ? opt.textContent.trim() : "",
+        quantidade: Number(div.querySelector(".qtd").value || 0),
+        preco_unitario: Number(div.querySelector(".preco").value || 0)
+      };
+    })
+    .filter(item => item.quantidade > 0 && item.produto_nome);
+}
+
+function atualizarTotal(){
+  const total = coletarItens().reduce((soma, item) =>
+    soma + (item.quantidade * item.preco_unitario), 0
+  );
+
+  document.getElementById("totalEstimado").textContent =
+    "Total estimado: " + dinheiro(total);
+}
+
+async function carregar(){
+  try{
+    setStatus("Carregando clientes e produtos...", "warn");
+
+    clientes = await api("/api/clientes");
+    produtos = await api("/api/produtos");
+
+    renderizarClientes(clientes, false);
+
+    document.getElementById("itens").innerHTML = "";
+    addItem();
+
+    const params = new URLSearchParams(location.search);
+    const clienteIdUrl = params.get("cliente_id");
+    const nomeUrl = params.get("cliente");
+
+    if(nomeUrl){
+      document.getElementById("buscaCliente").value = nomeUrl;
+      filtrarClientes();
+    }
+
+    if(clienteIdUrl){
+      renderizarClientes(clientes, false);
+      document.getElementById("cliente_id").value = clienteIdUrl;
+      mostrarResumoCliente();
+    }
+
+    setStatus(
+      `${clientes.length} cliente(s) e ${produtos.length} produto(s) carregados.`,
+      "ok"
+    );
+  }catch(err){
+    setStatus(err.message, "err");
+  }
+}
+
+document.getElementById("buscaCliente").addEventListener("input", filtrarClientes);
+document.getElementById("cliente_id").addEventListener("change", mostrarResumoCliente);
+document.getElementById("btnAddItem").addEventListener("click", addItem);
+
+document.getElementById("comprou").addEventListener("change", function(){
+  const comprou = this.value === "sim";
+  document.getElementById("itens").style.opacity = comprou ? "1" : ".55";
+  document.getElementById("btnAddItem").disabled = !comprou;
+});
+
+document.getElementById("visitaForm").addEventListener("submit", async event => {
+  event.preventDefault();
+
+  const clienteId = document.getElementById("cliente_id").value;
+  const comprou = document.getElementById("comprou").value;
+  const itens = comprou === "sim" ? coletarItens() : [];
+
+  if(!clienteId){
+    setStatus("Selecione um cliente.", "err");
+    return;
+  }
+
+  if(comprou === "sim" && !itens.length){
+    setStatus("Adicione pelo menos um produto com quantidade maior que zero.", "err");
+    return;
+  }
+
+  const body = {
+    cliente_id: clienteId,
+    data_visita: document.getElementById("data_visita").value,
+    comprou,
+    observacoes: document.getElementById("observacoes").value.trim(),
+    itens
+  };
+
+  try{
+    setStatus("Salvando visita...", "warn");
+
+    const data = await api("/api/visitas", {
+      method:"POST",
+      body:JSON.stringify(body)
+    });
+
+    setStatus("Visita registrada com sucesso.", "ok");
+
+    const resumo = document.getElementById("resumo");
+    resumo.style.display = "block";
+    resumo.innerHTML = `
+      <strong>Registro salvo</strong><br>
+      ID: ${data.visita_id}<br>
+      Total estimado: ${dinheiro(data.valor_total)}<br>
+      Itens: ${data.itens}
+    `;
+
+    const clienteSelecionado = document.getElementById("cliente_id").value;
+
+    document.getElementById("visitaForm").reset();
+    document.getElementById("data_visita").value = hoje;
+    document.getElementById("cliente_id").value = clienteSelecionado;
+    document.getElementById("itens").innerHTML = "";
+    addItem();
+    mostrarResumoCliente();
+    atualizarTotal();
+
+    window.scrollTo({ top:0, behavior:"smooth" });
+  }catch(err){
+    setStatus(err.message, "err");
+  }
+});
+
+document.getElementById("btnSair").addEventListener("click", () => {
+  localStorage.removeItem("token");
+  localStorage.removeItem("vendedorId");
+  localStorage.removeItem("vendedorNome");
+  localStorage.removeItem("vendedorRole");
+  location.href = "login.html";
+});
+
 carregar();
-</script></body></html>
+</script>
+</body>
+</html>
