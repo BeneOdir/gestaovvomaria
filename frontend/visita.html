@@ -145,6 +145,54 @@
       color:#7C2D12;
       text-align:center
     }
+    .live-results{
+      display:none;
+      margin-top:10px;
+      border:1px solid #FED7AA;
+      border-radius:18px;
+      background:#FFFFFF;
+      overflow:hidden;
+      max-height:320px;
+      overflow-y:auto
+    }
+    .live-results.show{display:block}
+    .live-result-item{
+      width:100%;
+      border:0;
+      border-bottom:1px solid #FDE7CF;
+      background:white;
+      padding:14px;
+      text-align:left;
+      cursor:pointer;
+      display:block
+    }
+    .live-result-item:last-child{border-bottom:0}
+    .live-result-item:active{background:#FFF7ED}
+    .live-result-name{
+      display:block;
+      font-size:15px;
+      font-weight:900;
+      color:#7C2D12
+    }
+    .live-result-local{
+      display:block;
+      margin-top:3px;
+      font-size:13px;
+      color:#78716C
+    }
+    .live-results-empty{
+      padding:14px;
+      text-align:center;
+      color:#991B1B;
+      font-weight:800
+    }
+    .search-help{
+      margin-top:7px;
+      font-size:12px;
+      color:#78716C;
+      text-align:center
+    }
+
     .success{background:#047857;color:white}
     .item{
       border:1px solid #FED7AA;
@@ -221,8 +269,11 @@
           autocomplete="off">
       </div>
 
-      <div class="group">
-        <label>Cliente *</label>
+      <div class="search-help">Digite pelo menos 3 letras. Os clientes aparecerão abaixo.</div>
+      <div id="listaResultadosClientes" class="live-results"></div>
+
+      <div class="group" id="grupoClienteSelect">
+        <label>Cliente selecionado *</label>
         <select id="cliente_id">
           <option value="">Carregando clientes...</option>
         </select>
@@ -438,6 +489,69 @@ function textoCliente(c){
   ].filter(Boolean).join(" "));
 }
 
+
+function esconderListaResultados(){
+  const lista = document.getElementById("listaResultadosClientes");
+  lista.classList.remove("show");
+  lista.innerHTML = "";
+}
+
+function selecionarClienteResultado(id){
+  const cliente = clientes.find(c => String(c.id) === String(id));
+  if(!cliente) return;
+
+  document.getElementById("cliente_id").value = String(cliente.id);
+  document.getElementById("buscaCliente").value = identificacaoCliente(cliente);
+  mostrarResumoCliente();
+  esconderListaResultados();
+  atualizarResultadoBusca(1);
+  setStatus("Cliente selecionado. Continue o registro da visita/venda.", "ok");
+}
+
+function renderizarListaResultados(lista){
+  const box = document.getElementById("listaResultadosClientes");
+  const termo = document.getElementById("buscaCliente").value.trim();
+
+  if(termo.length < 3){
+    esconderListaResultados();
+    return;
+  }
+
+  box.classList.add("show");
+
+  if(!lista.length){
+    box.innerHTML = `
+      <div class="live-results-empty">
+        Nenhum cliente encontrado.<br>
+        Use o botão “Cadastrar novo cliente”.
+      </div>
+    `;
+    return;
+  }
+
+  box.innerHTML = lista.slice(0, 20).map(c => {
+    const nome = nomeCliente(c);
+    const bairro = bairroCliente(c);
+    const cidade = String(c.cidade || "").trim();
+    const local = [bairro, cidade].filter(Boolean).join(" • ");
+
+    return `
+      <button type="button"
+              class="live-result-item"
+              data-cliente-id="${c.id}">
+        <span class="live-result-name">🏪 ${nome}</span>
+        <span class="live-result-local">${local || "Localização não informada"}</span>
+      </button>
+    `;
+  }).join("");
+
+  box.querySelectorAll(".live-result-item").forEach(botao => {
+    botao.addEventListener("click", () => {
+      selecionarClienteResultado(botao.dataset.clienteId);
+    });
+  });
+}
+
 function renderizarClientes(lista, manterSelecionado=true){
   const select = document.getElementById("cliente_id");
   const selecionado = manterSelecionado ? select.value : "";
@@ -479,10 +593,21 @@ function atualizarResultadoBusca(qtd){
 }
 
 function filtrarClientes(){
-  const termo = normalizar(document.getElementById("buscaCliente").value);
+  const campo = document.getElementById("buscaCliente");
+  const termoOriginal = campo.value.trim();
+  const termo = normalizar(termoOriginal);
 
   if(!termo){
     renderizarClientes(clientes);
+    esconderListaResultados();
+    document.getElementById("clienteResumo").style.display = "none";
+    return;
+  }
+
+  if(termoOriginal.length < 3){
+    renderizarClientes(clientes);
+    esconderListaResultados();
+    atualizarResultadoBusca(clientes.length);
     return;
   }
 
@@ -499,14 +624,13 @@ function filtrarClientes(){
   });
 
   renderizarClientes(filtrados, false);
+  renderizarListaResultados(filtrados);
 
-  if(filtrados.length === 1){
-    document.getElementById("cliente_id").value = String(filtrados[0].id);
-    mostrarResumoCliente();
-  }else{
+  if(filtrados.length !== 1){
     document.getElementById("clienteResumo").style.display = "none";
   }
 }
+
 
 function mostrarResumoCliente(){
   const id = document.getElementById("cliente_id").value;
@@ -809,12 +933,22 @@ async function carregar(){
 }
 
 document.getElementById("buscaCliente").addEventListener("input", filtrarClientes);
-document.getElementById("cliente_id").addEventListener("change", mostrarResumoCliente);
+document.getElementById("cliente_id").addEventListener("change", () => {
+  mostrarResumoCliente();
+  esconderListaResultados();
+});
 
 document.getElementById("btnNovoCliente").addEventListener("click", abrirCadastroRapido);
 document.getElementById("btnCancelarNovoCliente").addEventListener("click", fecharCadastroRapido);
 document.getElementById("btnSalvarNovoCliente").addEventListener("click", salvarNovoCliente);
 document.getElementById("novo_tipo").addEventListener("change", atualizarTipoNovoCliente);
+
+document.addEventListener("click", event => {
+  const areaBusca = document.querySelector(".search-box");
+  if(areaBusca && !areaBusca.contains(event.target)){
+    esconderListaResultados();
+  }
+});
 
 document.getElementById("btnAddItem").addEventListener("click", addItem);
 

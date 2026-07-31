@@ -141,17 +141,15 @@ function validarCliente(c) {
 }
 
 async function listarClientes(env, user) {
-  let result;
-  if (user.role === "admin") {
-    result = await env.DB.prepare("SELECT * FROM clientes ORDER BY id DESC").all();
-  } else {
-    result = await env.DB.prepare(
-      "SELECT * FROM clientes WHERE vendedor_id = ? ORDER BY id DESC"
-    ).bind(user.vendedorId).all();
-  }
+  const result = await env.DB.prepare(`
+    SELECT c.*, vd.nome AS vendedor_nome
+    FROM clientes c
+    LEFT JOIN vendedores vd ON vd.id = c.vendedor_id
+    ORDER BY c.nome_fantasia, c.razao_social, c.id DESC
+  `).all();
+
   return json(result.results || []);
 }
-
 async function criarCliente(request, env, user) {
   const entrada = await request.json();
   const c = montarCliente(entrada, user);
@@ -301,10 +299,7 @@ async function criarVisita(request, env, user) {
 
     const cliente = await env.DB.prepare("SELECT id, nome_fantasia, razao_social, vendedor_id FROM clientes WHERE id = ?").bind(clienteId).first();
     if (!cliente) return json({ error: "Cliente não encontrado." }, 404);
-    if (user.role !== "admin" && Number(cliente.vendedor_id) !== Number(user.vendedorId)) {
-      return json({ error: "Cliente não pertence a este vendedor." }, 403);
-    }
-
+    
     let valorTotal = 0;
     const itensLimpos = itens
       .map(i => {
