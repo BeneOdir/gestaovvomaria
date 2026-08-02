@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#e9a900">
+  <link rel="apple-touch-icon" href="images/icon-192.png">
   <title>Gestão Vovó Maria · Login</title>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
@@ -25,7 +28,7 @@
 </head>
 <body>
   <div class="card">
-    <img src="images/logo-vm-gestao.png" class="logo" alt="Gestão Vovó Maria">
+    <img src="images/splash-logo.png" class="logo" alt="Gestão Vovó Maria">
     <h1>Gestão Vovó Maria</h1>
     <div class="sub">Software de Gestão Comercial</div>
 
@@ -45,7 +48,7 @@
   </div>
 
 <script>
-const API_URL = "https://gestaovvomaria-api.odir-bene12.workers.dev";
+const API_URL = "https://gestaovomaria-api.odir-bene12.workers.dev";
 
 function setMsg(texto, tipo){
   const el = document.getElementById("msg");

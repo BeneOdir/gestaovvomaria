@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#e9a900">
+  <link rel="apple-touch-icon" href="images/icon-192.png">
   <title>Gestão Vovó Maria · Clientes V1.2</title>
   <script src="https://cdn.jsdelivr.net/npm/dexie@3.2.4/dist/dexie.js"></script>
   <style>
@@ -146,6 +149,10 @@
   </form>
 
   <div class="actions">
+    <button class="btn muted" type="button" onclick="location.href='dashboard.html'">Dashboard</button>
+    <button class="btn dark" type="button" onclick="location.href='visita.html'">Visita/Venda</button>
+    <button class="btn soft" type="button" onclick="location.href='relatorio-dia.html'">Relatórios</button>
+    <button class="btn soft" id="navProdutos" type="button" onclick="location.href='produtos.html'">Produtos</button>
     <button class="btn dark" id="btnListar" type="button">Ver clientes locais</button>
     <button class="btn soft" id="btnListarNuvem" type="button">Ver clientes da nuvem</button>
     <button class="btn soft" id="btnSincronizar" type="button">Sincronizar pendentes</button>
@@ -202,7 +209,9 @@
 </div>
 
 <script>
-const API_URL = "https://gestaovvomaria-api.odir-bene12.workers.dev";
+const API_URL = "https://gestaovomaria-api.odir-bene12.workers.dev";
+const vendedorRole = localStorage.getItem("vendedorRole") || "vendedor";
+if(vendedorRole !== "admin") document.getElementById("navProdutos").hidden = true;
 
 const db = new Dexie("VovoMariaDB_v2");
 db.version(2).stores({
@@ -449,16 +458,18 @@ function renderClientesFiltrados(){
       const nome = c.nome_fantasia || c.razao_social || c.nome_estabelecimento || "Cliente";
       const origemNuvem = String(ultimaOrigemClientes).includes("nuvem");
       const idCliente = c.id || c.cliente_id || "";
-      const visitaUrl = `visita.html?cliente_id=${encodeURIComponent(idCliente)}&cliente=${encodeURIComponent(nome)}`;
+      const avulso = c.tipo_origem === "avulso";
+      const parametroId = avulso ? "cliente_avulso_id" : "cliente_id";
+      const visitaUrl = `visita.html?${parametroId}=${encodeURIComponent(idCliente)}&cliente=${encodeURIComponent(nome)}`;
       return `
       <div class="client-card">
         <strong>${nome}</strong><br>
         ${c.tipo_pessoa || ""}: ${c.documento || c.cnpj || c.cpf || ""}<br>
         Cidade: ${c.cidade || ""}/${c.estado || ""}<br>
         Telefone: ${c.telefone || ""} ${c.instagram ? " · Instagram: " + c.instagram : ""}<br>
-        <span class="pill">${c.status_comercial || "prospect"}</span>
-        <span class="pill">${c.status_cliente || "ativo"}</span>
-        <span class="pill">${c.sync_status || (origemNuvem ? "nuvem" : "pendente")} ${idCliente ? "· ID: " + idCliente : ""}</span>
+        <span class="pill">${avulso ? "CADASTRO INCOMPLETO" : (c.status_comercial || "prospect")}</span>
+        <span class="pill">${avulso ? "cliente avulso" : (c.status_cliente || "ativo")}</span>
+        <span class="pill">${c.sync_status || (origemNuvem ? "nuvem" : "pendente")} ${idCliente ? `· ${avulso ? "ID AVULSO" : "ID CLIENTE"}: ${idCliente}` : ""}</span>
         ${origemNuvem && idCliente ? `<div class="card-actions"><a class="btn-mini" href="${visitaUrl}">Registrar visita/venda</a></div>` : ""}
       </div>`;
     }).join("")}
@@ -476,14 +487,22 @@ async function listarClientesNuvem(){
   if(!token){ setStatus("Sem token. Faça login novamente.", "err"); return; }
   setStatus("Buscando clientes na nuvem...", "warn");
   try{
-    const resp = await fetch(`${API_URL}/api/clientes`, {
-      method:"GET",
-      headers:{ "Authorization":`Bearer ${token}` }
-    });
-    const data = await resp.json();
-    if(!resp.ok) throw new Error(data.error || "Erro ao consultar nuvem");
+    const opcoes = { method:"GET", headers:{ "Authorization":`Bearer ${token}` } };
+    const [respClientes, respAvulsos] = await Promise.all([
+      fetch(`${API_URL}/api/clientes`, opcoes),
+      fetch(`${API_URL}/api/clientes-avulsos`, opcoes)
+    ]);
+    const [dataClientes, dataAvulsos] = await Promise.all([
+      respClientes.json().catch(() => ({})),
+      respAvulsos.json().catch(() => ({}))
+    ]);
+    if(!respClientes.ok) throw new Error(dataClientes.error || "Erro ao consultar clientes na nuvem");
+    if(!respAvulsos.ok) throw new Error(dataAvulsos.error || "Erro ao consultar clientes avulsos na nuvem");
+    const clientesFormais = Array.isArray(dataClientes) ? dataClientes.map(c => ({ ...c, tipo_origem:"cliente" })) : [];
+    const clientesAvulsos = Array.isArray(dataAvulsos) ? dataAvulsos.map(c => ({ ...c, tipo_origem:"avulso" })) : [];
+    const data = [...clientesFormais, ...clientesAvulsos];
     setStatus("Clientes da nuvem carregados.", "ok");
-    await renderClientes(Array.isArray(data) ? data : [], "clientes da nuvem");
+    await renderClientes(data, "clientes da nuvem");
   }catch(err){
     setStatus("Não foi possível listar clientes da nuvem: " + err.message, "err");
   }

@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#e9a900">
+  <link rel="apple-touch-icon" href="images/icon-192.png">
   <title>Gestão Vovó Maria · Vendedores</title>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
@@ -84,7 +87,7 @@
 </div>
 
 <script>
-const API_URL = "https://gestaovvomaria-api.odir-bene12.workers.dev";
+const API_URL = "https://gestaovomaria-api.odir-bene12.workers.dev";
 
 const token = localStorage.getItem("token");
 const vendedorNome = localStorage.getItem("vendedorNome") || "Usuário";

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#e9a900">
+  <link rel="apple-touch-icon" href="images/icon-192.png">
+  <title>Gestão Vovó Maria · Produtos</title>
+  <style>
+    *{box-sizing:border-box}body{font-family:'Segoe UI',system-ui,sans-serif;background:#FFF7ED;color:#431407;margin:0;padding:16px}.wrap{max-width:780px;margin:auto}.card{background:#fff;border:1px solid #FED7AA;border-radius:22px;padding:18px;margin-bottom:14px}.nav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}.nav a,.btn{border:0;border-radius:999px;padding:11px 15px;background:#EA580C;color:#fff;text-decoration:none;font-weight:800;cursor:pointer}.nav a{background:#7C2D12}.grid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px}input,select{width:100%;padding:12px;border:2px solid #FED7AA;border-radius:16px;font-size:16px}.produto{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center}.muted{color:#78716C}.status{padding:12px;border-radius:16px;background:#FEF3C7;margin-bottom:12px}.status.ok{background:#D1FAE5}.status.err{background:#FEE2E2}@media(max-width:620px){.grid,.produto{grid-template-columns:1fr}.btn{width:100%}}
+  </style>
+</head>
+<body><main class="wrap">
+  <nav class="nav"><a href="dashboard.html">Dashboard</a><a href="clientes.html">Clientes</a><a href="visita.html">Visita/Venda</a><a href="relatorio-dia.html">Relatórios</a></nav>
+  <section class="card"><h1>Produtos</h1><p class="muted">Cadastro, preço e situação dos produtos.</p><div id="status" class="status">Carregando...</div>
+    <form id="formProduto"><input id="produto_id" type="hidden"><div class="grid">
+      <input id="nome" required placeholder="Nome do produto">
+      <input id="preco" required type="number" min="0" step="0.01" placeholder="Preço">
+      <select id="ativo"><option value="1">Ativo</option><option value="0">Inativo</option></select>
+    </div><button class="btn" type="submit">Salvar produto</button></form>
+  </section>
+  <section id="lista"></section>
+</main><script>
+const API_URL="https://gestaovomaria-api.odir-bene12.workers.dev";
+const token=localStorage.getItem("token");
+const role=localStorage.getItem("vendedorRole");
+if(!token){location.href="login.html"}else if(role!=="admin"){alert("Acesso restrito ao administrador.");location.href="dashboard.html"}
+let produtos=[];
+function dinheiro(v){return Number(v||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"})}
+function status(msg,tipo=""){const el=document.getElementById("status");el.textContent=msg;el.className="status "+tipo}
+async function api(path,opcoes={}){const r=await fetch(API_URL+path,{...opcoes,headers:{"Content-Type":"application/json","Authorization":"Bearer "+token,...opcoes.headers}});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||"Erro na API");return d}
+function render(){document.getElementById("lista").innerHTML=produtos.map(p=>`<article class="card produto"><div><strong>${p.nome}</strong><br><span class="muted">${dinheiro(p.preco_padrao)} · ${Number(p.ativo)===1?"Ativo":"Inativo"}</span></div><button class="btn" type="button" data-id="${p.id}">Editar</button></article>`).join("")||'<div class="card">Nenhum produto.</div>';document.querySelectorAll("[data-id]").forEach(b=>b.onclick=()=>editar(Number(b.dataset.id)))}
+function editar(id){const p=produtos.find(x=>Number(x.id)===id);document.getElementById("produto_id").value=p.id;document.getElementById("nome").value=p.nome;document.getElementById("preco").value=p.preco_padrao;document.getElementById("ativo").value=Number(p.ativo)===1?"1":"0";scrollTo({top:0,behavior:"smooth"})}
+async function carregar(){try{produtos=await api("/api/produtos?todos=1");render();status(`${produtos.length} produto(s).`,"ok")}catch(e){status(e.message,"err")}}
+document.getElementById("formProduto").onsubmit=async e=>{e.preventDefault();const id=document.getElementById("produto_id").value;const body={nome:document.getElementById("nome").value.trim(),preco:Number(document.getElementById("preco").value),ativo:Number(document.getElementById("ativo").value)};try{await api(id?`/api/produtos/${id}`:"/api/produtos",{method:id?"PUT":"POST",body:JSON.stringify(body)});e.target.reset();document.getElementById("produto_id").value="";await carregar()}catch(err){status(err.message,"err")}};
+carregar();
+</script></body></html>

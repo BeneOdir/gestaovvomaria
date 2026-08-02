@@ -145,7 +145,7 @@ async function listarClientes(env, user) {
     SELECT c.*, vd.nome AS vendedor_nome
     FROM clientes c
     LEFT JOIN vendedores vd ON vd.id = c.vendedor_id
-    ORDER BY c.nome_fantasia, c.razao_social, c.id DESC
+    ORDER BY c.nome_estabelecimento COLLATE NOCASE, c.id DESC
   `).all();
 
   return json(result.results || []);
@@ -191,6 +191,104 @@ async function criarCliente(request, env, user) {
   ).run();
 
   return json({ success: true, id: res.meta.last_row_id, cliente: c });
+}
+
+async function criarClienteAvulso(request, env, user) {
+  const dados = await request.json();
+  const nomeEstabelecimento = normalizeText(dados.nome_estabelecimento);
+  const cpf = onlyNumbers(dados.cpf);
+  const cnpj = onlyNumbers(dados.cnpj);
+  const tipoInformado = normalizeText(dados.tipo_pessoa).toUpperCase();
+  const tipoPessoa = tipoInformado === "PF" || tipoInformado === "PJ"
+    ? tipoInformado
+    : (cnpj ? "PJ" : (cpf ? "PF" : null));
+
+  if (!nomeEstabelecimento) {
+    return json({ error: "Informe o nome ou identificação do cliente." }, 400);
+  }
+  if (cpf && cpf.length !== 11) {
+    return json({ error: "CPF deve conter 11 dígitos." }, 400);
+  }
+  if (cnpj && cnpj.length !== 14) {
+    return json({ error: "CNPJ deve conter 14 dígitos." }, 400);
+  }
+  if (cpf && cnpj) {
+    return json({ error: "Informe somente CPF ou CNPJ." }, 400);
+  }
+
+  const cliente = {
+    vendedor_id: user.vendedorId,
+    tipo_pessoa: tipoPessoa,
+    cnpj: cnpj || null,
+    cpf: cpf || null,
+    nome_estabelecimento: nomeEstabelecimento,
+    telefone: onlyNumbers(dados.telefone) || null,
+    whatsapp: onlyNumbers(dados.whatsapp) || null,
+    cep: onlyNumbers(dados.cep) || null,
+    endereco: normalizeText(dados.endereco) || null,
+    cidade: normalizeText(dados.cidade) || null,
+    estado: normalizeText(dados.estado).toUpperCase() || null,
+    observacoes_gerais: normalizeText(dados.observacoes_gerais) || null,
+    status_cadastro: "incompleto",
+  };
+
+  let res;
+  try {
+    console.log("DIAGNOSTICO criarClienteAvulso:", {
+      dbExiste: !!env?.DB,
+      nome: dados.nome_estabelecimento,
+      vendedorId: user?.vendedorId
+    });
+
+    res = await env.DB.prepare(`
+      INSERT INTO clientes_avulsos (
+        vendedor_id, nome_estabelecimento, tipo_pessoa, cpf, cnpj,
+        telefone, whatsapp, cep, endereco, cidade, estado, observacoes_gerais,
+        status_cadastro,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `).bind(
+      cliente.vendedor_id, cliente.nome_estabelecimento, cliente.tipo_pessoa,
+      cliente.cpf, cliente.cnpj, cliente.telefone, cliente.whatsapp,
+      cliente.cep, cliente.endereco,
+      cliente.cidade, cliente.estado, cliente.observacoes_gerais,
+      cliente.status_cadastro
+    ).run();
+  } catch (err) {
+    console.error("ERRO criarClienteAvulso:", {
+      message: err?.message,
+      stack: err?.stack,
+      dbExiste: !!env?.DB
+    });
+
+    return json({
+      error: "Não foi possível salvar o cliente avulso.",
+      detalhe: err.message,
+    }, 500);
+  }
+
+  const criado = { id: res.meta.last_row_id, ...cliente, tipo_origem: "avulso" };
+  return json({ success: true, id: criado.id, cliente: criado });
+}
+
+async function listarClientesAvulsos(env) {
+  const result = await env.DB.prepare(`
+    SELECT
+      id,
+      nome_estabelecimento,
+      telefone,
+      whatsapp,
+      cep,
+      endereco,
+      cidade,
+      estado,
+      observacoes_gerais,
+      'avulso' AS tipo_origem
+    FROM clientes_avulsos
+    ORDER BY nome_estabelecimento COLLATE NOCASE, id DESC
+  `).all();
+
+  return json(result.results || []);
 }
 
 async function sync(request, env, user) {
@@ -278,12 +376,37 @@ async function health(env) {
   }
 }
 
-async function listarProdutos(env) {
+async function listarProdutos(request, env, user) {
+  const incluirInativos = user.role === "admin" && new URL(request.url).searchParams.get("todos") === "1";
   const result = await env.DB.prepare(
-    "SELECT * FROM produtos WHERE ativo <> 'inativo' ORDER BY nome"
+    incluirInativos
+      ? "SELECT * FROM produtos ORDER BY nome"
+      : "SELECT * FROM produtos WHERE ativo = 1 OR ativo = 'ativo' ORDER BY nome"
   ).all();
 
   return json(result.results || []);
+}
+
+async function gerirProduto(request, env, user, id = null) {
+  if (user.role !== "admin") return json({ error: "Acesso restrito ao administrador" }, 403);
+  const d = await request.json();
+  const nome = normalizeText(d.nome);
+  const preco = Number(d.preco ?? d.preco_padrao);
+  const ativo = d.ativo === false || d.ativo === 0 || d.ativo === "0" || d.ativo === "inativo" ? 0 : 1;
+  if (!nome) return json({ error: "Informe o nome do produto." }, 400);
+  if (!Number.isFinite(preco) || preco < 0) return json({ error: "Informe um preço válido e não negativo." }, 400);
+
+  if (id) {
+    const atual = await env.DB.prepare("SELECT id FROM produtos WHERE id = ?").bind(id).first();
+    if (!atual) return json({ error: "Produto não encontrado." }, 404);
+    await env.DB.prepare("UPDATE produtos SET nome = ?, preco_padrao = ?, ativo = ? WHERE id = ?")
+      .bind(nome, preco, ativo, id).run();
+    return json({ success: true, produto: { id, nome, preco_padrao: preco, ativo } });
+  }
+
+  const res = await env.DB.prepare("INSERT INTO produtos (nome, preco_padrao, ativo, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)")
+    .bind(nome, preco, ativo).run();
+  return json({ success: true, produto: { id: res.meta.last_row_id, nome, preco_padrao: preco, ativo } }, 201);
 }
 
 async function criarVisita(request, env, user) {
@@ -409,6 +532,179 @@ async function relatorioDia(request, env, user) {
 
   return json({ data, resumo, produtos: itens.results || [], visitas: visitas.results || [] });
 }
+async function criarVenda(request, env, user) {
+  const d = await request.json();
+  const clienteId = Number(d.cliente_id || 0);
+  const clienteAvulsoId = Number(d.cliente_avulso_id || 0);
+  const dataVisita = normalizeText(d.data_visita || new Date().toISOString().slice(0, 10));
+  const comprou = d.comprou === "sim" || d.comprou === true ? "sim" : "nao";
+  const observacoes = normalizeText(d.observacoes);
+  const formaPagamento = normalizeText(d.forma_pagamento || "não informado").toLowerCase();
+  const desconto = Number(d.desconto || 0);
+  const itensEntrada = Array.isArray(d.itens)
+    ? d.itens
+    : (Array.isArray(d.produtos) ? d.produtos : []);
+
+  if (!user?.vendedorId) return json({ error: "Vendedor autenticado não identificado." }, 401);
+  if ((!clienteId && !clienteAvulsoId) || (clienteId && clienteAvulsoId)) {
+    return json({ error: "Selecione exatamente um cliente cadastrado ou avulso." }, 400);
+  }
+  if (!Number.isFinite(desconto) || desconto < 0) return json({ error: "Desconto inválido." }, 400);
+
+  const cliente = clienteId
+    ? await env.DB.prepare("SELECT id, nome_fantasia, razao_social, nome_estabelecimento FROM clientes WHERE id = ?").bind(clienteId).first()
+    : await env.DB.prepare("SELECT id, nome_estabelecimento FROM clientes_avulsos WHERE id = ?").bind(clienteAvulsoId).first();
+  if (!cliente) return json({ error: "Cliente não encontrado." }, 404);
+
+  const itens = itensEntrada.map(item => {
+    const quantidade = Number(item.quantidade);
+    const precoUnitario = Number(item.preco_unitario);
+    return {
+      produto_id: Number(item.produto_id || 0) || null,
+      produto_nome: normalizeText(item.produto_nome),
+      quantidade,
+      preco_unitario: precoUnitario,
+      subtotal: quantidade * precoUnitario
+    };
+  }).filter(item => item.produto_id || item.produto_nome || item.quantidade || item.preco_unitario);
+
+  if (comprou === "sim" && !itens.length) return json({ error: "Adicione ao menos um produto." }, 400);
+  if (itens.some(item => !item.produto_nome || !Number.isFinite(item.quantidade) || item.quantidade <= 0 || !Number.isFinite(item.preco_unitario) || item.preco_unitario < 0)) {
+    return json({ error: "Todos os itens devem ter produto, quantidade maior que zero e preço não negativo." }, 400);
+  }
+
+  const subtotal = comprou === "sim" ? itens.reduce((soma, item) => soma + item.subtotal, 0) : 0;
+  if (desconto > subtotal) return json({ error: "O desconto não pode superar o subtotal." }, 400);
+  const valorTotal = subtotal - desconto;
+  const recebidoInformado = Number(d.valor_recebido ?? valorTotal);
+  if (!Number.isFinite(recebidoInformado) || recebidoInformado < 0) return json({ error: "Valor recebido inválido." }, 400);
+  const valorRecebido = Math.min(recebidoInformado, valorTotal);
+  const situacaoPagamento = valorTotal === 0 ? "sem_venda" : valorRecebido >= valorTotal ? "pago" : valorRecebido > 0 ? "parcial" : "pendente";
+
+  const visitaRes = await env.DB.prepare(`
+    INSERT INTO visitas (
+      vendedor_id, cliente_id, cliente_avulso_id, data_visita, comprou,
+      valor_total, observacoes, forma_pagamento, valor_recebido, desconto,
+      situacao_pagamento, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).bind(user.vendedorId, clienteId || 0, clienteAvulsoId || null, dataVisita, comprou,
+    valorTotal, observacoes, formaPagamento, valorRecebido, desconto, situacaoPagamento).run();
+  const visitaId = visitaRes.meta.last_row_id;
+
+  try {
+    if (itens.length) {
+      await env.DB.batch(itens.map(item => env.DB.prepare(`
+        INSERT INTO visita_itens (visita_id, produto_id, produto_nome, quantidade, preco_unitario, subtotal)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).bind(visitaId, item.produto_id, item.produto_nome, item.quantidade, item.preco_unitario, item.subtotal)));
+    }
+  } catch (err) {
+    await env.DB.prepare("DELETE FROM visitas WHERE id = ?").bind(visitaId).run();
+    throw err;
+  }
+
+  if (clienteId) {
+    await env.DB.prepare("UPDATE clientes SET ultima_visita = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+      .bind(dataVisita, clienteId).run();
+  }
+
+  return json({
+    success: true, visita_id: visitaId, data_visita: dataVisita,
+    cliente: cliente.nome_fantasia || cliente.razao_social || cliente.nome_estabelecimento || "Consumidor",
+    vendedor: user.nome || "Vendedor", itens, subtotal, desconto,
+    valor_total: valorTotal, valor_recebido: valorRecebido,
+    forma_pagamento: formaPagamento, situacao_pagamento: situacaoPagamento
+  });
+}
+
+async function relatorioPeriodo(request, env, user) {
+  const url = new URL(request.url);
+  const hoje = new Date().toISOString().slice(0, 10);
+  const dataInicial = url.searchParams.get("data_inicial") || url.searchParams.get("data") || hoje;
+  const dataFinal = url.searchParams.get("data_final") || url.searchParams.get("data") || dataInicial;
+  if (dataInicial > dataFinal) return json({ error: "A data inicial deve ser anterior à data final." }, 400);
+  const filtro = user.role === "admin" ? "" : " AND v.vendedor_id = ?";
+  const params = user.role === "admin" ? [dataInicial, dataFinal] : [dataInicial, dataFinal, user.vendedorId];
+
+  const resumo = await env.DB.prepare(`
+    SELECT COUNT(*) AS visitas,
+      SUM(CASE WHEN v.comprou = 'sim' THEN 1 ELSE 0 END) AS compras,
+      SUM(CASE WHEN v.comprou = 'nao' THEN 1 ELSE 0 END) AS sem_compra,
+      COALESCE(SUM(v.valor_total + v.desconto), 0) AS total_bruto,
+      COALESCE(SUM(v.valor_total), 0) AS valor_total,
+      COALESCE(SUM(v.valor_recebido), 0) AS total_recebido,
+      COALESCE(SUM(v.valor_total - v.valor_recebido), 0) AS total_pendente,
+      COALESCE(SUM(v.desconto), 0) AS descontos,
+      COUNT(DISTINCT CASE WHEN v.cliente_avulso_id IS NOT NULL
+        THEN 'A:' || v.cliente_avulso_id ELSE 'C:' || v.cliente_id END) AS clientes_atendidos
+    FROM visitas v WHERE v.data_visita BETWEEN ? AND ?${filtro}
+  `).bind(...params).first();
+
+  const produtos = await env.DB.prepare(`
+    SELECT vi.produto_nome, COALESCE(SUM(vi.quantidade), 0) AS quantidade,
+      COALESCE(SUM(vi.subtotal), 0) AS total
+    FROM visita_itens vi INNER JOIN visitas v ON v.id = vi.visita_id
+    WHERE v.data_visita BETWEEN ? AND ?${filtro}
+    GROUP BY vi.produto_nome ORDER BY quantidade DESC
+  `).bind(...params).all();
+
+  const formas = await env.DB.prepare(`
+    SELECT COALESCE(NULLIF(v.forma_pagamento, ''), 'não informado') AS forma_pagamento,
+      COUNT(*) AS vendas, COALESCE(SUM(v.valor_total), 0) AS total,
+      COALESCE(SUM(v.valor_recebido), 0) AS recebido
+    FROM visitas v WHERE v.comprou = 'sim' AND v.data_visita BETWEEN ? AND ?${filtro}
+    GROUP BY COALESCE(NULLIF(v.forma_pagamento, ''), 'não informado') ORDER BY total DESC
+  `).bind(...params).all();
+
+  const visitas = await env.DB.prepare(`
+    SELECT v.*, COALESCE(c.nome_fantasia, c.razao_social, c.nome_estabelecimento,
+      ca.nome_estabelecimento, 'Consumidor') AS cliente_nome, vd.nome AS vendedor_nome
+    FROM visitas v LEFT JOIN clientes c ON c.id = v.cliente_id
+    LEFT JOIN clientes_avulsos ca ON ca.id = v.cliente_avulso_id
+    LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
+    WHERE v.data_visita BETWEEN ? AND ?${filtro}
+    ORDER BY v.data_visita DESC, v.id DESC
+  `).bind(...params).all();
+
+  const itensVendas = await env.DB.prepare(`
+    SELECT vi.visita_id, vi.produto_id, vi.produto_nome, vi.quantidade,
+      vi.preco_unitario, vi.subtotal
+    FROM visita_itens vi INNER JOIN visitas v ON v.id = vi.visita_id
+    WHERE v.data_visita BETWEEN ? AND ?${filtro}
+    ORDER BY vi.visita_id DESC, vi.id
+  `).bind(...params).all();
+
+  const resumoVendedores = user.role === "admin"
+    ? await env.DB.prepare(`
+      SELECT v.vendedor_id, COALESCE(vd.nome, 'Vendedor') AS vendedor_nome,
+        COUNT(*) AS visitas, SUM(CASE WHEN v.comprou = 'sim' THEN 1 ELSE 0 END) AS vendas,
+        COALESCE(SUM(v.valor_total + v.desconto), 0) AS total_bruto,
+        COALESCE(SUM(v.desconto), 0) AS descontos,
+        COALESCE(SUM(v.valor_total), 0) AS total_liquido,
+        COALESCE(SUM(v.valor_recebido), 0) AS total_recebido,
+        COALESCE(SUM(v.valor_total - v.valor_recebido), 0) AS total_pendente
+      FROM visitas v LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
+      WHERE v.data_visita BETWEEN ? AND ?
+      GROUP BY v.vendedor_id, vd.nome ORDER BY total_liquido DESC
+    `).bind(dataInicial, dataFinal).all()
+    : { results: [] };
+
+  const itensPorVisita = new Map();
+  for (const item of itensVendas.results || []) {
+    const chave = Number(item.visita_id);
+    if (!itensPorVisita.has(chave)) itensPorVisita.set(chave, []);
+    itensPorVisita.get(chave).push(item);
+  }
+  const vendasDetalhadas = (visitas.results || []).map(visita => ({
+    ...visita,
+    itens: itensPorVisita.get(Number(visita.id)) || []
+  }));
+
+  return json({ data_inicial: dataInicial, data_final: dataFinal, resumo,
+    formas_pagamento: formas.results || [], resumo_vendedores: resumoVendedores.results || [],
+    produtos: produtos.results || [], visitas: vendasDetalhadas });
+}
+
 async function listarVendedores(env, user) {
   if (user.role !== "admin") {
     return json({ error: "Acesso restrito ao administrador" }, 403);
@@ -492,9 +788,45 @@ async function atualizarVendedor(request, env, user, id) {
     vendedor: { id, nome, email, role, status }
   });
 }
+
+async function debugClientes(request, env, user) {
+  const url = new URL(request.url);
+  const [clientes, vendedores, visitas, listaClientes] = await Promise.all([
+    env.DB.prepare("SELECT COUNT(*) AS total FROM clientes").first(),
+    env.DB.prepare("SELECT COUNT(*) AS total FROM vendedores").first(),
+    env.DB.prepare("SELECT COUNT(*) AS total FROM visitas").first(),
+    env.DB.prepare(`
+      SELECT COUNT(*) AS total
+      FROM clientes c
+      LEFT JOIN vendedores vd ON vd.id = c.vendedor_id
+    `).first(),
+  ]);
+
+  return json({
+    user: {
+      id: user.vendedorId,
+      role: user.role,
+    },
+    db: {
+      clientes: clientes?.total ?? 0,
+      vendedores: vendedores?.total ?? 0,
+      visitas: visitas?.total ?? 0,
+    },
+    consultas: {
+      listarClientes: listaClientes?.total ?? 0,
+    },
+    binding: "DB",
+    diagnostico: "debug-clientes-2026-08-01",
+    hostname: url.hostname,
+    pathname: url.pathname,
+  });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    try {
 
  if (request.method === "OPTIONS") {
   return new Response(null, {
@@ -529,8 +861,11 @@ if (url.pathname.startsWith("/api/vendedores/") && request.method === "PUT") {
   return atualizarVendedor(request, env, user, id);
 }
 
+    if (url.pathname === "/api/debug-clientes" && request.method === "GET") return debugClientes(request, env, user);
     if (url.pathname === "/api/clientes" && request.method === "GET") return listarClientes(env, user);
     if (url.pathname === "/api/clientes" && request.method === "POST") return criarCliente(request, env, user);
+    if (url.pathname === "/api/clientes-avulsos" && request.method === "GET") return listarClientesAvulsos(env);
+    if (url.pathname === "/api/clientes-avulsos" && request.method === "POST") return criarClienteAvulso(request, env, user);
     if (url.pathname === "/api/sync" && request.method === "GET") {
   return json({ status: "ok", rota: "/api/sync", metodo: "use POST" });
 }
@@ -539,10 +874,20 @@ if (url.pathname === "/api/sync" && request.method === "POST") {
   return sync(request, env, user);
 }
 
-    if (url.pathname === "/api/produtos" && request.method === "GET") return listarProdutos(env);
+    if (url.pathname === "/api/produtos" && request.method === "GET") return listarProdutos(request, env, user);
+    if (url.pathname === "/api/produtos" && request.method === "POST") return gerirProduto(request, env, user);
+    if (url.pathname.startsWith("/api/produtos/") && request.method === "PUT") {
+      return gerirProduto(request, env, user, Number(url.pathname.split("/").pop()));
+    }
     if (url.pathname === "/api/visitas" && request.method === "GET") return listarVisitas(request, env, user);
-    if (url.pathname === "/api/visitas" && request.method === "POST") return criarVisita(request, env, user);
-    if (url.pathname === "/api/relatorio-dia" && request.method === "GET") return relatorioDia(request, env, user);
+    if (url.pathname === "/api/visitas" && request.method === "POST") return criarVenda(request, env, user);
+    if (url.pathname === "/api/relatorio-dia" && request.method === "GET") return relatorioPeriodo(request, env, user);
     return json({ error: "Rota não encontrada" }, 404);
+    } catch (err) {
+      return json({
+        error: "Erro interno no Worker",
+        detalhe: err.message,
+      }, 500);
+    }
   },
 };

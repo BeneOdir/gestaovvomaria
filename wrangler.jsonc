@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gestaovomaria-api",
+  "main": "worker/worker.js",
+  "compatibility_date": "2026-08-02",
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "gestaovovomaria-db",
+      "database_id": "2f0bf025-6686-410c-a6d7-a720668d8ff2"
+    }
+  ]
+}
