@@ -124,3 +124,28 @@ Resumo das alterações.
 Testes recomendados.
 
 Possíveis riscos.
+
+---
+
+## Infraestrutura oficial — Gestão Vovó Maria
+
+- Repositório GitHub: `BeneOdir/gestaovvomaria`
+- Frontend Cloudflare Pages: `https://gestaovvomaria.pages.dev`
+- Worker/API: `gestaovomaria-api`
+- URL oficial da API: `https://gestaovomaria-api.odir-bene12.workers.dev`
+- Banco D1: `gestaovovomaria-db`
+- Database ID: `2f0bf025-6686-410c-a6d7-a720668d8ff2`
+- Binding: `DB`
+
+### Regras de infraestrutura
+
+1. Não criar outro Worker, Pages, banco ou repositório com nome semelhante.
+2. Todo frontend deve chamar somente a URL oficial da API.
+3. Todo deploy do Worker deve partir do `wrangler.jsonc` oficial.
+4. Antes de qualquer alteração no Cloudflare, conferir nome, URL e ID completos.
+5. Recursos antigos não devem ser utilizados nem excluídos sem auditoria específica.
+6. Não alterar nomes oficiais apenas para padronização visual.
+7. A diferença entre os nomes dos recursos é conhecida e aceita:
+   - GitHub/Pages: `gestaovvomaria`
+   - Worker/API: `gestaovomaria-api`
+   - Banco D1: `gestaovovomaria-db`

@@ -1,3 +1,13 @@
+## PROJETO OFICIAL
+
+- Frontend: https://gestaovvomaria.pages.dev
+- API: https://gestaovomaria-api.odir-bene12.workers.dev
+- Banco D1: gestaovovomaria-db
+- Binding: DB
+- Repositório: BeneOdir/gestaovvomaria
+
+Não confundir com projetos antigos de nomes semelhantes.
+
 Gestão Vovó Maria - V1.3 provisória de uso diário do vendedor
 
 Objetivo: permitir que o vendedor já use no dia a dia para registrar visitas/vendas e gerar relatório simples no fim do dia.
@@ -10,7 +20,7 @@ Arquivos:
 
 Ordem:
 1) Execute migracao_vendas_visitas_v1_3.sql no D1.
-2) Cole worker_vendas_v1_3.js no Worker gestaovvomaria-api e implante.
+2) Cole worker_vendas_v1_3.js no Worker gestaovomaria-api e implante.
 3) Teste /api/health.
 4) Publique visita.html e relatorio-dia.html no mesmo local do frontend.
 5) Acesse visita.html após login.
