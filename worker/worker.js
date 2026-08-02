@@ -2,14 +2,18 @@ const JWT_SECRET = "vovomaria_mvp_2026_trocar_depois";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type,Authorization",
+  "Access-Control-Max-Age": "86400",
 };
 
+function respostaCors(body = null, status = 200, headers = {}) {
+  return new Response(body, { status, headers: { ...corsHeaders, ...headers } });
+}
+
 function json(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "Content-Type": "application/json; charset=utf-8", ...corsHeaders },
+  return respostaCors(JSON.stringify(data), status, {
+    "Content-Type": "application/json; charset=utf-8",
   });
 }
 
@@ -23,7 +27,7 @@ function normalizeText(v = "") {
 
 function filtroRegistroTeste(alias = "v", somenteTeste = false) {
   const texto = `LOWER(' ' || COALESCE(${alias}.observacoes, '') || ' ')`;
-  const contemPalavraTeste = `${texto} GLOB '*[^0-9a-zÀ-ÿ_]teste[^0-9a-zÀ-ÿ_]*'`;
+  const contemPalavraTeste = `${texto} GLOB '*[^0-9a-z_]teste[^0-9a-z_]*'`;
   return somenteTeste ? contemPalavraTeste : `NOT (${contemPalavraTeste})`;
 }
 
@@ -837,10 +841,7 @@ export default {
     try {
 
  if (request.method === "OPTIONS") {
-  return new Response(null, {
-    status: 204,
-    headers: corsHeaders
-  });
+  return respostaCors(null, 204);
 }
 
     if (url.pathname === "/" || url.pathname === "/api/health") return health(env);
