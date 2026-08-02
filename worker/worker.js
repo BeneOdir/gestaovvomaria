@@ -21,6 +21,12 @@ function normalizeText(v = "") {
   return String(v || "").trim();
 }
 
+function filtroRegistroTeste(alias = "v", somenteTeste = false) {
+  const texto = `LOWER(' ' || COALESCE(${alias}.observacoes, '') || ' ')`;
+  const contemPalavraTeste = `${texto} GLOB '*[^0-9a-zÀ-ÿ_]teste[^0-9a-zÀ-ÿ_]*'`;
+  return somenteTeste ? contemPalavraTeste : `NOT (${contemPalavraTeste})`;
+}
+
 async function jwtSign(payload) {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey(
@@ -473,7 +479,7 @@ async function listarVisitas(request, env, user) {
       FROM visitas v
       LEFT JOIN clientes c ON c.id = v.cliente_id
       LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
-      WHERE v.data_visita = ?
+      WHERE v.data_visita = ? AND ${filtroRegistroTeste("v")}
       ORDER BY v.id DESC
     `).bind(data).all();
   } else {
@@ -482,7 +488,7 @@ async function listarVisitas(request, env, user) {
       FROM visitas v
       LEFT JOIN clientes c ON c.id = v.cliente_id
       LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
-      WHERE v.data_visita = ? AND v.vendedor_id = ?
+      WHERE v.data_visita = ? AND v.vendedor_id = ? AND ${filtroRegistroTeste("v")}
       ORDER BY v.id DESC
     `).bind(data, user.vendedorId).all();
   }
@@ -501,8 +507,8 @@ async function relatorioDia(request, env, user) {
       SUM(CASE WHEN comprou = 'sim' THEN 1 ELSE 0 END) AS compras,
       SUM(CASE WHEN comprou = 'nao' THEN 1 ELSE 0 END) AS sem_compra,
       COALESCE(SUM(valor_total), 0) AS valor_total
-    FROM visitas
-    WHERE data_visita = ?${filtroVendedor}
+    FROM visitas v
+    WHERE data_visita = ?${filtroVendedor} AND ${filtroRegistroTeste("v")}
   `).bind(...params).first();
 
   const itens = await env.DB.prepare(`
@@ -510,6 +516,7 @@ async function relatorioDia(request, env, user) {
     FROM visita_itens vi
     INNER JOIN visitas v ON v.id = vi.visita_id
     WHERE v.data_visita = ?${user.role === "admin" ? "" : " AND v.vendedor_id = ?"}
+      AND ${filtroRegistroTeste("v")}
     GROUP BY vi.produto_nome
     ORDER BY quantidade DESC
   `).bind(...params).all();
@@ -520,14 +527,14 @@ async function relatorioDia(request, env, user) {
       FROM visitas v
       LEFT JOIN clientes c ON c.id = v.cliente_id
       LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
-      WHERE v.data_visita = ? ORDER BY v.id DESC
+      WHERE v.data_visita = ? AND ${filtroRegistroTeste("v")} ORDER BY v.id DESC
     `).bind(data).all()
     : env.DB.prepare(`
       SELECT v.*, c.nome_fantasia, c.razao_social, vd.nome AS vendedor_nome
       FROM visitas v
       LEFT JOIN clientes c ON c.id = v.cliente_id
       LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
-      WHERE v.data_visita = ? AND v.vendedor_id = ? ORDER BY v.id DESC
+      WHERE v.data_visita = ? AND v.vendedor_id = ? AND ${filtroRegistroTeste("v")} ORDER BY v.id DESC
     `).bind(data, user.vendedorId).all());
 
   return json({ data, resumo, produtos: itens.results || [], visitas: visitas.results || [] });
@@ -617,13 +624,14 @@ async function criarVenda(request, env, user) {
   });
 }
 
-async function relatorioPeriodo(request, env, user) {
+async function relatorioPeriodo(request, env, user, somenteTeste = false) {
   const url = new URL(request.url);
   const hoje = new Date().toISOString().slice(0, 10);
   const dataInicial = url.searchParams.get("data_inicial") || url.searchParams.get("data") || hoje;
   const dataFinal = url.searchParams.get("data_final") || url.searchParams.get("data") || dataInicial;
   if (dataInicial > dataFinal) return json({ error: "A data inicial deve ser anterior à data final." }, 400);
   const filtro = user.role === "admin" ? "" : " AND v.vendedor_id = ?";
+  const filtroTeste = filtroRegistroTeste("v", somenteTeste);
   const params = user.role === "admin" ? [dataInicial, dataFinal] : [dataInicial, dataFinal, user.vendedorId];
 
   const resumo = await env.DB.prepare(`
@@ -637,14 +645,14 @@ async function relatorioPeriodo(request, env, user) {
       COALESCE(SUM(v.desconto), 0) AS descontos,
       COUNT(DISTINCT CASE WHEN v.cliente_avulso_id IS NOT NULL
         THEN 'A:' || v.cliente_avulso_id ELSE 'C:' || v.cliente_id END) AS clientes_atendidos
-    FROM visitas v WHERE v.data_visita BETWEEN ? AND ?${filtro}
+    FROM visitas v WHERE v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
   `).bind(...params).first();
 
   const produtos = await env.DB.prepare(`
     SELECT vi.produto_nome, COALESCE(SUM(vi.quantidade), 0) AS quantidade,
       COALESCE(SUM(vi.subtotal), 0) AS total
     FROM visita_itens vi INNER JOIN visitas v ON v.id = vi.visita_id
-    WHERE v.data_visita BETWEEN ? AND ?${filtro}
+    WHERE v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
     GROUP BY vi.produto_nome ORDER BY quantidade DESC
   `).bind(...params).all();
 
@@ -652,7 +660,7 @@ async function relatorioPeriodo(request, env, user) {
     SELECT COALESCE(NULLIF(v.forma_pagamento, ''), 'não informado') AS forma_pagamento,
       COUNT(*) AS vendas, COALESCE(SUM(v.valor_total), 0) AS total,
       COALESCE(SUM(v.valor_recebido), 0) AS recebido
-    FROM visitas v WHERE v.comprou = 'sim' AND v.data_visita BETWEEN ? AND ?${filtro}
+    FROM visitas v WHERE v.comprou = 'sim' AND v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
     GROUP BY COALESCE(NULLIF(v.forma_pagamento, ''), 'não informado') ORDER BY total DESC
   `).bind(...params).all();
 
@@ -662,7 +670,7 @@ async function relatorioPeriodo(request, env, user) {
     FROM visitas v LEFT JOIN clientes c ON c.id = v.cliente_id
     LEFT JOIN clientes_avulsos ca ON ca.id = v.cliente_avulso_id
     LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
-    WHERE v.data_visita BETWEEN ? AND ?${filtro}
+    WHERE v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
     ORDER BY v.data_visita DESC, v.id DESC
   `).bind(...params).all();
 
@@ -670,7 +678,7 @@ async function relatorioPeriodo(request, env, user) {
     SELECT vi.visita_id, vi.produto_id, vi.produto_nome, vi.quantidade,
       vi.preco_unitario, vi.subtotal
     FROM visita_itens vi INNER JOIN visitas v ON v.id = vi.visita_id
-    WHERE v.data_visita BETWEEN ? AND ?${filtro}
+    WHERE v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
     ORDER BY vi.visita_id DESC, vi.id
   `).bind(...params).all();
 
@@ -684,7 +692,7 @@ async function relatorioPeriodo(request, env, user) {
         COALESCE(SUM(v.valor_recebido), 0) AS total_recebido,
         COALESCE(SUM(v.valor_total - v.valor_recebido), 0) AS total_pendente
       FROM visitas v LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
-      WHERE v.data_visita BETWEEN ? AND ?
+      WHERE v.data_visita BETWEEN ? AND ? AND ${filtroTeste}
       GROUP BY v.vendedor_id, vd.nome ORDER BY total_liquido DESC
     `).bind(dataInicial, dataFinal).all()
     : { results: [] };
@@ -700,7 +708,7 @@ async function relatorioPeriodo(request, env, user) {
     itens: itensPorVisita.get(Number(visita.id)) || []
   }));
 
-  return json({ data_inicial: dataInicial, data_final: dataFinal, resumo,
+  return json({ data_inicial: dataInicial, data_final: dataFinal, registros_teste: somenteTeste, resumo,
     formas_pagamento: formas.results || [], resumo_vendedores: resumoVendedores.results || [],
     produtos: produtos.results || [], visitas: vendasDetalhadas });
 }
@@ -881,7 +889,8 @@ if (url.pathname === "/api/sync" && request.method === "POST") {
     }
     if (url.pathname === "/api/visitas" && request.method === "GET") return listarVisitas(request, env, user);
     if (url.pathname === "/api/visitas" && request.method === "POST") return criarVenda(request, env, user);
-    if (url.pathname === "/api/relatorio-dia" && request.method === "GET") return relatorioPeriodo(request, env, user);
+    if (url.pathname === "/api/relatorio-testes" && request.method === "GET") return relatorioPeriodo(request, env, user, true);
+    if (url.pathname === "/api/relatorio-dia" && request.method === "GET") return relatorioPeriodo(request, env, user, false);
     return json({ error: "Rota não encontrada" }, 404);
     } catch (err) {
       return json({

@@ -83,6 +83,20 @@ Prioridades:
 
 ## Regras comerciais
 
+### Registros de teste
+
+Um registro de visita/venda é considerado de teste quando o campo `observacoes`
+contém a palavra inteira `TESTE`, ignorando maiúsculas e minúsculas.
+
+Exemplos reconhecidos: `TESTE`, `teste`, `Teste` e `Treinamento - TESTE`.
+Palavras que apenas contêm essa sequência como parte de outra palavra não são
+consideradas registros de teste.
+
+Relatórios, faturamento, comissões, rankings, produtos vendidos e indicadores
+oficiais devem excluir esses registros automaticamente. Consultas específicas
+de teste devem usar exclusivamente esses registros e preservar os filtros de
+permissão por vendedor.
+
 Cliente Avulso ≠ Venda Varejo.
 
 Toda venda deve entrar no relatório.
