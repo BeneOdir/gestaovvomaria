@@ -8,7 +8,7 @@
   <link rel="apple-touch-icon" href="images/icon-192.png">
   <title>Gestão Vovó Maria · Relatórios</title>
   <style>
-    *{box-sizing:border-box}body{font-family:'Segoe UI',system-ui,sans-serif;background:#F5F0E8;color:#431407;margin:0;padding:16px}.wrap{max-width:1040px;margin:auto}.card{background:#fff;border:1px solid #FED7AA;border-radius:20px;padding:16px;margin-bottom:12px}.nav,.acoes,.atalhos,.grid{display:flex;flex-wrap:wrap;gap:9px}.nav a,.btn{border:0;border-radius:999px;padding:11px 14px;background:#7C2D12;color:#fff;text-decoration:none;font-weight:800;cursor:pointer}.btn{background:#EA580C}.btn.sec{background:#FED7AA;color:#7C2D12}.grid>*{flex:1;min-width:180px}input{width:100%;padding:11px;border:2px solid #FED7AA;border-radius:15px}.metricas{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px}.metrica{background:#FFF7ED;border-radius:16px;padding:13px}.metrica strong{display:block;font-size:20px;color:#EA580C}.status{background:#FEF3C7;padding:12px;border-radius:15px;margin-bottom:12px}.status.ok{background:#D1FAE5}.status.err{background:#FEE2E2}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #FED7AA;vertical-align:top}.empresa{font-weight:900;color:#78350F}.cabecalho-relatorio{display:flex;justify-content:space-between;gap:16px;align-items:start}.modal{position:fixed;inset:0;background:#0008;display:grid;place-items:center;padding:16px;z-index:10}.modal[hidden]{display:none}.ticket{background:#fff;max-width:620px;width:100%;max-height:90vh;overflow:auto;padding:22px;border-radius:20px}.ticket-item{display:flex;justify-content:space-between;gap:12px;border-bottom:1px dashed #ccc;padding:7px 0}.right{text-align:right}.venda-nao{color:#78716C}@media(max-width:700px){table{font-size:12px}.cabecalho-relatorio{display:block}.tabela-scroll{overflow:auto}}
+    *{box-sizing:border-box}body{font-family:'Segoe UI',system-ui,sans-serif;background:#F5F0E8;color:#431407;margin:0;padding:16px}.wrap{max-width:1040px;margin:auto}.card{background:#fff;border:1px solid #FED7AA;border-radius:20px;padding:16px;margin-bottom:12px}.nav,.acoes,.atalhos,.grid{display:flex;flex-wrap:wrap;gap:9px}.nav a,.btn{border:0;border-radius:999px;padding:11px 14px;background:#7C2D12;color:#fff;text-decoration:none;font-weight:800;cursor:pointer}.btn{background:#EA580C}.btn.sec{background:#FED7AA;color:#7C2D12}.btn.perigo{background:#B91C1C}.grid>*{flex:1;min-width:180px}input,select,textarea{width:100%;padding:11px;border:2px solid #FED7AA;border-radius:15px;font:inherit}textarea{min-height:90px;resize:vertical}.metricas{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px}.metrica{background:#FFF7ED;border-radius:16px;padding:13px}.metrica strong{display:block;font-size:20px;color:#EA580C}.status{background:#FEF3C7;padding:12px;border-radius:15px;margin-bottom:12px}.status.ok{background:#D1FAE5}.status.err{background:#FEE2E2}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #FED7AA;vertical-align:top}.empresa{font-weight:900;color:#78350F}.cabecalho-relatorio{display:flex;justify-content:space-between;gap:16px;align-items:start}.modal{position:fixed;inset:0;background:#0008;display:grid;place-items:center;padding:16px;z-index:10}.modal[hidden]{display:none}.ticket{background:#fff;max-width:620px;width:100%;max-height:90vh;overflow:auto;padding:22px;border-radius:20px}.ticket-item{display:flex;justify-content:space-between;gap:12px;border-bottom:1px dashed #ccc;padding:7px 0}.right{text-align:right}.venda-nao{color:#78716C}.aviso-exclusao{background:#FEE2E2;border:1px solid #FCA5A5;border-radius:15px;padding:12px;margin-top:16px}@media(max-width:700px){table{font-size:12px}.cabecalho-relatorio{display:block}.tabela-scroll{overflow:auto}}
     @page{size:A4;margin:12mm}
     @media print{
       body{background:#fff;padding:0;font-size:10pt}.nao-imprimir,.nav,.filtros,.acoes,.status,.btn{display:none!important}.wrap{max-width:none}.card{border:0;border-radius:0;padding:5px 0;margin:0 0 8px;break-inside:avoid}.conteudo-relatorio{display:block!important}.metricas{grid-template-columns:repeat(4,1fr)}table{font-size:8.5pt}th,td{padding:4px}.modal{display:none!important}
@@ -32,6 +32,7 @@
   </section>
 </main>
 <div id="modalTicket" class="modal" hidden><article class="ticket"><div id="ticketConteudo"></div><div class="acoes nao-imprimir"><button class="btn" id="imprimirTicket">Imprimir ticket</button><button class="btn sec" id="fecharTicket">Fechar</button></div></article></div>
+<div id="modalGerenciar" class="modal" hidden><article class="ticket"><h2 id="gerenciarTitulo">Gerenciar visita</h2><div id="gerenciarIdentificacao"></div><form id="formGerenciar"><div class="grid"><label>Data<input id="gerenciarData" type="date" required></label><label>Forma de pagamento<input id="gerenciarForma" required></label><label>Valor recebido<input id="gerenciarRecebido" type="number" min="0" step="0.01" required></label><label>Desconto<input id="gerenciarDesconto" type="number" min="0" step="0.01" required></label><label>Situação do pagamento<select id="gerenciarSituacao"><option value="pago">Pago</option><option value="parcial">Parcial</option><option value="pendente">Pendente</option><option value="sem_venda">Sem venda</option></select></label></div><label>Observação<textarea id="gerenciarObservacoes"></textarea></label><div id="gerenciarItens"></div><div class="acoes"><button class="btn" type="submit">Salvar alterações</button><button class="btn sec" id="cancelarGerenciar" type="button">Cancelar</button></div></form><section class="aviso-exclusao"><strong>Exclusão definitiva</strong><p>Esta ação excluirá definitivamente a venda e seus itens. Ela deixará de aparecer nos relatórios e no fechamento de caixa.</p><label>Senha atual do administrador<input id="senhaExcluir" type="password" autocomplete="current-password"></label><label>Digite EXCLUIR<input id="palavraExcluir" autocomplete="off"></label><button class="btn perigo" id="excluirDefinitivamente" type="button">Excluir definitivamente</button></section></article></div>
 <script>
 const API_URL="https://gestaovomaria-api.odir-bene12.workers.dev";
 const token=localStorage.getItem("token");
@@ -50,8 +51,80 @@ function tabela(cabecalho,linhas){if(!linhas.length)return "Nenhum registro.";re
 function metricas(resumo){const totalBruto=Number(resumo.total_bruto||0),descontos=Number(resumo.descontos||0),liquido=Number(resumo.valor_total||0),recebido=Number(resumo.total_recebido||0),pendente=Number(resumo.total_pendente||0),diferenca=liquido-recebido;const base=[["Visitas",resumo.visitas||0],["Vendas",resumo.compras||0],["Não compraram",resumo.sem_compra||0],["Total bruto",dinheiro(totalBruto)],["Descontos",dinheiro(descontos)],["Total líquido",dinheiro(liquido)],["Total recebido",dinheiro(recebido)],["Total pendente",dinheiro(pendente)],["Diferença",dinheiro(diferenca)],["Clientes atendidos",resumo.clientes_atendidos||0]];return base.map(([a,b])=>`<div class="metrica">${a}<strong>${b}</strong></div>`).join("")}
 function montarResumoTexto(d){const r=d.resumo||{};const diferenca=Number(r.valor_total||0)-Number(r.total_recebido||0);return [`Vovó Maria Pães e Biscoitos`,titulo,`Período: ${d.data_inicial} a ${d.data_final}`,`Usuário: ${nome}`,`Visitas: ${r.visitas||0}`,`Vendas: ${r.compras||0}`,`Sem compra: ${r.sem_compra||0}`,`Total bruto: ${dinheiro(r.total_bruto)}`,`Descontos: ${dinheiro(r.descontos)}`,`Total líquido: ${dinheiro(r.valor_total)}`,`Total recebido: ${dinheiro(r.total_recebido)}`,`Total pendente: ${dinheiro(r.total_pendente)}`,`Diferença: ${dinheiro(diferenca)}`].join("\n")}
 async function copiarTexto(texto){if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(texto);else{const a=document.createElement("textarea");a.value=texto;document.body.appendChild(a);a.select();document.execCommand("copy");a.remove()}setStatus("Resumo copiado para a área de transferência.","ok")}
-function renderizar(d){dadosAtuais=d;const r=d.resumo&&typeof d.resumo==="object"?d.resumo:{};const formas=lista(d,"formas_pagamento"),produtos=lista(d,"produtos"),visitas=lista(d,"visitas"),vendedores=lista(d,"resumo_vendedores");const vendas=visitas.filter(v=>v.comprou==="sim");const clientes=[...new Map(visitas.map(v=>[`${v.cliente_avulso_id?"A":"C"}:${v.cliente_avulso_id||v.cliente_id}`,v])).values()];document.getElementById("tituloRelatorio").textContent=titulo;document.getElementById("periodoRelatorio").textContent=`Período: ${d.data_inicial} a ${d.data_final}`;document.getElementById("usuarioRelatorio").textContent=role==="admin"?`Administrador: ${nome}`:`Vendedor: ${nome}`;document.getElementById("geradoEm").textContent=`Gerado em ${new Date().toLocaleString("pt-BR")}`;document.getElementById("metricas").innerHTML=metricas(r);document.getElementById("formas").innerHTML=tabela(["Forma","Vendas","Total líquido","Recebido"],formas.map(f=>[f.forma_pagamento,f.vendas,dinheiro(f.total),dinheiro(f.recebido)]));document.getElementById("produtos").innerHTML=tabela(["Produto","Quantidade","Subtotal bruto"],produtos.map(p=>[p.produto_nome,p.quantidade,dinheiro(p.total)]));document.getElementById("clientes").innerHTML=tabela(["Cliente","Vendedor","Último atendimento"],clientes.map(v=>[v.cliente_nome,v.vendedor_nome||nome,v.data_visita]));document.getElementById("secaoVendedores").hidden=role!=="admin";document.getElementById("vendedores").innerHTML=tabela(["Vendedor","Visitas","Vendas","Bruto","Descontos","Líquido","Recebido","Pendente"],vendedores.map(v=>[v.vendedor_nome,v.visitas,v.vendas,dinheiro(v.total_bruto),dinheiro(v.descontos),dinheiro(v.total_liquido),dinheiro(v.total_recebido),dinheiro(v.total_pendente)]));document.getElementById("vendas").innerHTML=tabela(["Venda","Data","Cliente","Vendedor","Total","Recebido","Pendente","Forma","Situação","Recibo"],vendas.map(v=>[`#${v.id}`,v.data_visita,v.cliente_nome,v.vendedor_nome||nome,dinheiro(v.valor_total),dinheiro(v.valor_recebido),dinheiro(Number(v.valor_total||0)-Number(v.valor_recebido||0)),v.forma_pagamento,v.situacao_pagamento,`<button class="btn sec" type="button" data-ticket="${v.id}">Ver ticket</button>`]));document.querySelectorAll("[data-ticket]").forEach(b=>b.onclick=()=>abrirTicket(Number(b.dataset.ticket)));textoAtual=montarResumoTexto(d);document.getElementById("resultado").hidden=false;setStatus("Relatório gerado.","ok")}
+function renderizar(d){
+  dadosAtuais=d;
+  const r=d.resumo&&typeof d.resumo==="object"?d.resumo:{};
+  const formas=lista(d,"formas_pagamento"),produtos=lista(d,"produtos"),visitas=lista(d,"visitas"),vendedores=lista(d,"resumo_vendedores");
+  const clientes=[...new Map(visitas.map(v=>[`${v.cliente_avulso_id?"A":"C"}:${v.cliente_avulso_id||v.cliente_id}`,v])).values()];
+  document.getElementById("tituloRelatorio").textContent=titulo;
+  document.getElementById("periodoRelatorio").textContent=`Período: ${d.data_inicial} a ${d.data_final}`;
+  document.getElementById("usuarioRelatorio").textContent=role==="admin"?`Administrador: ${nome}`:`Vendedor: ${nome}`;
+  document.getElementById("geradoEm").textContent=`Gerado em ${new Date().toLocaleString("pt-BR")}`;
+  document.getElementById("metricas").innerHTML=metricas(r);
+  document.getElementById("formas").innerHTML=tabela(["Forma","Vendas","Total líquido","Recebido"],formas.map(f=>[f.forma_pagamento,f.vendas,dinheiro(f.total),dinheiro(f.recebido)]));
+  document.getElementById("produtos").innerHTML=tabela(["Produto","Quantidade","Subtotal bruto"],produtos.map(p=>[p.produto_nome,p.quantidade,dinheiro(p.total)]));
+  document.getElementById("clientes").innerHTML=tabela(["Cliente","Vendedor","Último atendimento"],clientes.map(v=>[v.cliente_nome,v.vendedor_nome||nome,v.data_visita]));
+  document.getElementById("secaoVendedores").hidden=role!=="admin";
+  document.getElementById("vendedores").innerHTML=tabela(["Vendedor","Visitas","Vendas","Bruto","Descontos","Líquido","Recebido","Pendente"],vendedores.map(v=>[v.vendedor_nome,v.visitas,v.vendas,dinheiro(v.total_bruto),dinheiro(v.descontos),dinheiro(v.total_liquido),dinheiro(v.total_recebido),dinheiro(v.total_pendente)]));
+  document.getElementById("vendas").innerHTML=tabela(["Visita","Data","Cliente","Vendedor","Comprou","Total","Recebido","Pendente","Forma","Situação","Ações"],visitas.map(v=>{
+    const ticket=v.comprou==="sim"?`<button class="btn sec" type="button" data-ticket="${v.id}">Ver ticket</button>`:"";
+    const gerenciar=role==="admin"?`<button class="btn" type="button" data-gerenciar="${v.id}">Gerenciar</button>`:"";
+    return [`#${v.id}`,v.data_visita,v.cliente_nome,v.vendedor_nome||nome,v.comprou,dinheiro(v.valor_total),dinheiro(v.valor_recebido),dinheiro(Number(v.valor_total||0)-Number(v.valor_recebido||0)),v.forma_pagamento,v.situacao_pagamento,`${ticket} ${gerenciar}`];
+  }));
+  document.querySelectorAll("[data-ticket]").forEach(b=>b.onclick=()=>abrirTicket(Number(b.dataset.ticket)));
+  document.querySelectorAll("[data-gerenciar]").forEach(b=>b.onclick=()=>abrirGerenciamento(Number(b.dataset.gerenciar)));
+  textoAtual=montarResumoTexto(d);
+  document.getElementById("resultado").hidden=false;
+  setStatus("Relatório gerado.","ok");
+}
 async function carregar(){const ini=document.getElementById("data_inicial").value,fim=document.getElementById("data_final").value;try{setStatus("Carregando...");const resp=await fetch(`${API_URL}/api/relatorio-dia?data_inicial=${ini}&data_final=${fim}`,{headers:{Authorization:"Bearer "+token}});const d=await resp.json().catch(()=>({}));if(!resp.ok)throw new Error(d.error||"Erro ao carregar relatório");renderizar(d)}catch(e){setStatus(e.message,"err")}}
 function abrirTicket(id){const venda=lista(dadosAtuais,"visitas").find(v=>Number(v.id)===id);if(!venda)return;const itens=Array.isArray(venda.itens)?venda.itens:[];document.getElementById("ticketConteudo").innerHTML=`<div class="empresa">Vovó Maria Pães e Biscoitos</div><h2>Ticket da venda #${venda.id}</h2><p>Data: ${venda.data_visita}<br>Cliente: <strong>${venda.cliente_nome}</strong><br>Vendedor: ${venda.vendedor_nome||nome}</p>${itens.map(i=>`<div class="ticket-item"><span>${i.produto_nome}<br>${i.quantidade} × ${dinheiro(i.preco_unitario)}</span><strong>${dinheiro(i.subtotal)}</strong></div>`).join("")||"<p>Itens não disponíveis.</p>"}<p class="right">Bruto: ${dinheiro(Number(venda.valor_total||0)+Number(venda.desconto||0))}<br>Desconto: ${dinheiro(venda.desconto)}<br><strong>Total líquido: ${dinheiro(venda.valor_total)}</strong><br>Recebido: ${dinheiro(venda.valor_recebido)}<br>Pendente: ${dinheiro(Number(venda.valor_total||0)-Number(venda.valor_recebido||0))}<br>Pagamento: ${venda.forma_pagamento}<br>Situação: ${venda.situacao_pagamento}</p>`;document.getElementById("modalTicket").hidden=false}
+let visitaGerenciadaId=null;
+function escapar(valor){return String(valor??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+async function apiAdmin(id,metodo,body){
+  const resp=await fetch(`${API_URL}/api/admin/visitas/${id}`,{method:metodo,headers:{"Content-Type":"application/json",Authorization:"Bearer "+token},body:JSON.stringify(body)});
+  const dados=await resp.json().catch(()=>({}));
+  if(!resp.ok){const detalhe=dados.detalhe?` — ${dados.detalhe}`:"";throw new Error(`HTTP ${resp.status}: ${dados.error||"Erro na API"}${detalhe}`)}
+  return dados;
+}
+function fecharGerenciamento(){
+  visitaGerenciadaId=null;
+  document.getElementById("formGerenciar").reset();
+  document.getElementById("senhaExcluir").value="";
+  document.getElementById("palavraExcluir").value="";
+  document.getElementById("modalGerenciar").hidden=true;
+}
+function abrirGerenciamento(id){
+  if(role!=="admin")return;
+  const visita=lista(dadosAtuais,"visitas").find(v=>Number(v.id)===id);
+  if(!visita){setStatus("Visita não encontrada no relatório.","err");return}
+  visitaGerenciadaId=id;
+  document.getElementById("gerenciarTitulo").textContent=`Gerenciar visita #${id}`;
+  document.getElementById("gerenciarIdentificacao").innerHTML=`<p><strong>Vendedor:</strong> ${escapar(visita.vendedor_nome||nome)}<br><strong>Cliente:</strong> ${escapar(visita.cliente_nome)}<br><strong>Comprou:</strong> ${escapar(visita.comprou)}<br><strong>Total atual:</strong> ${dinheiro(visita.valor_total)}</p>`;
+  document.getElementById("gerenciarData").value=visita.data_visita||"";
+  document.getElementById("gerenciarForma").value=visita.forma_pagamento||"não informado";
+  document.getElementById("gerenciarRecebido").value=Number(visita.valor_recebido||0);
+  document.getElementById("gerenciarDesconto").value=Number(visita.desconto||0);
+  document.getElementById("gerenciarObservacoes").value=visita.observacoes||"";
+  document.getElementById("gerenciarSituacao").value=visita.situacao_pagamento||"pendente";
+  const itens=Array.isArray(visita.itens)?visita.itens:[];
+  document.getElementById("gerenciarItens").innerHTML=`<h3>Produtos</h3>${itens.map(i=>`<div class="ticket-item"><span>${escapar(i.produto_nome)}<br>${escapar(i.quantidade)} × ${dinheiro(i.preco_unitario)}</span><strong>${dinheiro(i.subtotal)}</strong></div>`).join("")||"<p>Nenhum item.</p>"}`;
+  document.getElementById("modalGerenciar").hidden=false;
+}
+document.getElementById("formGerenciar").onsubmit=async evento=>{
+  evento.preventDefault();
+  if(role!=="admin"||!visitaGerenciadaId)return;
+  const body={data_visita:document.getElementById("gerenciarData").value,observacoes:document.getElementById("gerenciarObservacoes").value,forma_pagamento:document.getElementById("gerenciarForma").value,valor_recebido:Number(document.getElementById("gerenciarRecebido").value),desconto:Number(document.getElementById("gerenciarDesconto").value),situacao_pagamento:document.getElementById("gerenciarSituacao").value};
+  try{await apiAdmin(visitaGerenciadaId,"PUT",body);fecharGerenciamento();await carregar();setStatus("Visita atualizada e relatório recalculado.","ok")}catch(err){setStatus(err.message,"err")}
+};
+document.getElementById("excluirDefinitivamente").onclick=async()=>{
+  if(role!=="admin"||!visitaGerenciadaId)return;
+  const senha=document.getElementById("senhaExcluir").value;
+  const confirmacao=document.getElementById("palavraExcluir").value;
+  if(!confirm("Esta ação excluirá definitivamente a venda e seus itens. Deseja continuar?"))return;
+  if(!confirm("Segunda confirmação: esta exclusão não poderá ser desfeita. Confirmar?"))return;
+  try{const retorno=await apiAdmin(visitaGerenciadaId,"DELETE",{senha,confirmacao});fecharGerenciamento();await carregar();setStatus(retorno.mensagem||"Venda excluída definitivamente.","ok")}catch(err){setStatus(err.message,"err")}
+};
+document.getElementById("cancelarGerenciar").onclick=fecharGerenciamento;
 document.querySelectorAll("[data-periodo]").forEach(b=>b.onclick=()=>periodo(b.dataset.periodo));document.getElementById("buscar").onclick=carregar;document.getElementById("copiar").onclick=()=>copiarTexto(textoAtual);document.getElementById("compartilhar").onclick=async()=>{if(navigator.share)await navigator.share({title:titulo,text:textoAtual});else await copiarTexto(textoAtual)};document.getElementById("imprimir").onclick=()=>window.print();document.getElementById("fecharTicket").onclick=()=>document.getElementById("modalTicket").hidden=true;document.getElementById("imprimirTicket").onclick=()=>{document.body.classList.add("imprimir-ticket");window.print();document.body.classList.remove("imprimir-ticket")};document.getElementById("sair").onclick=e=>{e.preventDefault();localStorage.clear();location.href="login.html"};periodo("hoje");
 </script></body></html>

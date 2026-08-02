@@ -414,7 +414,7 @@ async function gerirProduto(request, env, user, id = null) {
     const nome = normalizeText(d.nome);
     const preco = converterPrecoProduto(d.preco_padrao ?? d.preco);
     const situacao = d.ativo ?? d.status;
-    const ativo = situacao === false || situacao === 0 || situacao === "0" || situacao === "inativo" ? 0 : 1;
+    const ativo = situacao === false || situacao === 0 || situacao === "0" || situacao === "inativo" ? "inativo" : "ativo";
     if (!nome) return json({ error: "Informe o nome do produto." }, 400);
     if (!Number.isFinite(preco) || preco < 0) return json({ error: "Informe um preço válido e não negativo." }, 400);
 
@@ -422,13 +422,13 @@ async function gerirProduto(request, env, user, id = null) {
       if (!Number.isInteger(id) || id <= 0) return json({ error: "ID de produto inválido." }, 400);
       const atual = await env.DB.prepare("SELECT id FROM produtos WHERE id = ?").bind(id).first();
       if (!atual) return json({ error: "Produto não encontrado." }, 404);
-      await env.DB.prepare("UPDATE produtos SET nome = ?, preco_padrao = ?, ativo = ? WHERE id = ?")
+      await env.DB.prepare("UPDATE produtos SET nome = ?, preco = ?, ativo = ? WHERE id = ?")
         .bind(nome, preco, ativo, id).run();
       const produto = await env.DB.prepare("SELECT * FROM produtos WHERE id = ?").bind(id).first();
       return json({ success: true, produto });
     }
 
-    const res = await env.DB.prepare("INSERT INTO produtos (nome, preco_padrao, ativo, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)")
+    const res = await env.DB.prepare("INSERT INTO produtos (nome, preco, ativo) VALUES (?, ?, ?)")
       .bind(nome, preco, ativo).run();
     const produto = await env.DB.prepare("SELECT * FROM produtos WHERE id = ?").bind(res.meta.last_row_id).first();
     return json({ success: true, produto }, 201);
@@ -738,6 +738,114 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
     produtos: produtos.results || [], visitas: vendasDetalhadas });
 }
 
+function idVisitaValido(id) {
+  return Number.isInteger(id) && id > 0;
+}
+
+async function confirmarSenhaAdministrador(env, user, senha) {
+  if (user.role !== "admin") return false;
+  const administrador = await env.DB.prepare(
+    "SELECT senha_hash, role, status FROM vendedores WHERE id = ?"
+  ).bind(user.vendedorId).first();
+  return !!administrador && administrador.role === "admin" &&
+    administrador.status !== "inativo" && senha === administrador.senha_hash;
+}
+
+async function atualizarVisitaAdmin(request, env, user, id) {
+  try {
+    if (user.role !== "admin") return json({ error: "Acesso restrito ao administrador." }, 403);
+    if (!idVisitaValido(id)) return json({ error: "ID de visita inválido." }, 400);
+
+    let dados;
+    try {
+      dados = await request.json();
+    } catch {
+      return json({ error: "Corpo JSON inválido." }, 400);
+    }
+
+    const visita = await env.DB.prepare("SELECT id, comprou FROM visitas WHERE id = ?").bind(id).first();
+    if (!visita) return json({ error: "Visita não encontrada." }, 404);
+
+    const dataVisita = normalizeText(dados.data_visita);
+    const observacoes = normalizeText(dados.observacoes);
+    const formaPagamento = normalizeText(dados.forma_pagamento || "não informado");
+    const desconto = Number(dados.desconto);
+    const recebidoInformado = Number(dados.valor_recebido);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dataVisita)) return json({ error: "Data da visita inválida." }, 400);
+    if (!Number.isFinite(desconto) || desconto < 0) return json({ error: "Desconto inválido." }, 400);
+    if (!Number.isFinite(recebidoInformado) || recebidoInformado < 0) return json({ error: "Valor recebido inválido." }, 400);
+
+    const totalItens = await env.DB.prepare(
+      "SELECT COALESCE(SUM(subtotal), 0) AS subtotal FROM visita_itens WHERE visita_id = ?"
+    ).bind(id).first();
+    const subtotal = visita.comprou === "sim" ? Number(totalItens?.subtotal || 0) : 0;
+    if (desconto > subtotal) return json({ error: "O desconto não pode superar o subtotal." }, 400);
+
+    const valorTotal = subtotal - desconto;
+    const valorRecebido = Math.min(recebidoInformado, valorTotal);
+    const situacaoCalculada = valorTotal === 0 ? "sem_venda" :
+      valorRecebido >= valorTotal ? "pago" : valorRecebido > 0 ? "parcial" : "pendente";
+    const situacaoInformada = normalizeText(dados.situacao_pagamento);
+    const situacoesPermitidas = ["pago", "parcial", "pendente", "sem_venda"];
+    if (situacaoInformada && !situacoesPermitidas.includes(situacaoInformada)) {
+      return json({ error: "Situação de pagamento inválida." }, 400);
+    }
+    const situacaoPagamento = situacaoInformada || situacaoCalculada;
+
+    await env.DB.prepare(`
+      UPDATE visitas
+      SET data_visita = ?, observacoes = ?, forma_pagamento = ?, valor_recebido = ?,
+        desconto = ?, situacao_pagamento = ?, valor_total = ?
+      WHERE id = ?
+    `).bind(dataVisita, observacoes, formaPagamento, valorRecebido,
+      desconto, situacaoPagamento, valorTotal, id).run();
+
+    const atualizada = await env.DB.prepare("SELECT * FROM visitas WHERE id = ?").bind(id).first();
+    return json({ ok: true, mensagem: "Visita atualizada.", visita: atualizada });
+  } catch (err) {
+    return json({ error: "Erro ao atualizar visita.", detalhe: err?.message || String(err) }, 500);
+  }
+}
+
+async function excluirVisitaAdmin(request, env, user, id) {
+  try {
+    if (user.role !== "admin") return json({ error: "Acesso restrito ao administrador." }, 403);
+    if (!idVisitaValido(id)) return json({ error: "ID de visita inválido." }, 400);
+
+    let dados;
+    try {
+      dados = await request.json();
+    } catch {
+      return json({ error: "Corpo JSON inválido." }, 400);
+    }
+    if (!normalizeText(dados.senha)) return json({ error: "Informe a senha atual do administrador." }, 400);
+    if (dados.confirmacao !== "EXCLUIR") return json({ error: "Digite EXCLUIR para confirmar." }, 400);
+
+    const visita = await env.DB.prepare("SELECT * FROM visitas WHERE id = ?").bind(id).first();
+    if (!visita) return json({ error: "Visita não encontrada." }, 404);
+    if (!await confirmarSenhaAdministrador(env, user, dados.senha)) {
+      return json({ error: "Senha do administrador inválida." }, 401);
+    }
+
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM visita_itens WHERE visita_id = ?").bind(id),
+      env.DB.prepare("DELETE FROM visitas WHERE id = ?").bind(id),
+    ]);
+
+    const [visitaRestante, itensRestantes] = await Promise.all([
+      env.DB.prepare("SELECT COUNT(*) AS total FROM visitas WHERE id = ?").bind(id).first(),
+      env.DB.prepare("SELECT COUNT(*) AS total FROM visita_itens WHERE visita_id = ?").bind(id).first(),
+    ]);
+    if (Number(visitaRestante?.total || 0) !== 0 || Number(itensRestantes?.total || 0) !== 0) {
+      return json({ error: "Não foi possível confirmar a exclusão completa." }, 500);
+    }
+
+    return json({ ok: true, mensagem: "Venda excluída definitivamente.", visita_id: id });
+  } catch (err) {
+    return json({ error: "Erro ao excluir visita.", detalhe: err?.message || String(err) }, 500);
+  }
+}
+
 async function listarVendedores(env, user) {
   if (user.role !== "admin") {
     return json({ error: "Acesso restrito ao administrador" }, 403);
@@ -911,6 +1019,12 @@ if (url.pathname === "/api/sync" && request.method === "POST") {
     }
     if (url.pathname === "/api/visitas" && request.method === "GET") return listarVisitas(request, env, user);
     if (url.pathname === "/api/visitas" && request.method === "POST") return criarVenda(request, env, user);
+    if (url.pathname.startsWith("/api/admin/visitas/") && request.method === "PUT") {
+      return atualizarVisitaAdmin(request, env, user, Number(url.pathname.split("/").pop()));
+    }
+    if (url.pathname.startsWith("/api/admin/visitas/") && request.method === "DELETE") {
+      return excluirVisitaAdmin(request, env, user, Number(url.pathname.split("/").pop()));
+    }
     if (url.pathname === "/api/relatorio-testes" && request.method === "GET") return relatorioPeriodo(request, env, user, true);
     if (url.pathname === "/api/relatorio-dia" && request.method === "GET") return relatorioPeriodo(request, env, user, false);
     return json({ error: "Rota não encontrada" }, 404);
