@@ -408,29 +408,36 @@ function converterPrecoProduto(valor) {
 }
 
 async function gerirProduto(request, env, user, id = null) {
-  if (user.role !== "admin") return json({ error: "Acesso restrito ao administrador" }, 403);
-  const d = await request.json();
-  const nome = normalizeText(d.nome);
-  const preco = converterPrecoProduto(d.preco_padrao ?? d.preco);
-  const situacao = d.ativo ?? d.status;
-  const ativo = situacao === false || situacao === 0 || situacao === "0" || situacao === "inativo" ? 0 : 1;
-  if (!nome) return json({ error: "Informe o nome do produto." }, 400);
-  if (!Number.isFinite(preco) || preco < 0) return json({ error: "Informe um preço válido e não negativo." }, 400);
+  try {
+    if (user.role !== "admin") return json({ error: "Acesso restrito ao administrador" }, 403);
+    const d = await request.json();
+    const nome = normalizeText(d.nome);
+    const preco = converterPrecoProduto(d.preco_padrao ?? d.preco);
+    const situacao = d.ativo ?? d.status;
+    const ativo = situacao === false || situacao === 0 || situacao === "0" || situacao === "inativo" ? 0 : 1;
+    if (!nome) return json({ error: "Informe o nome do produto." }, 400);
+    if (!Number.isFinite(preco) || preco < 0) return json({ error: "Informe um preço válido e não negativo." }, 400);
 
-  if (id) {
-    if (!Number.isInteger(id) || id <= 0) return json({ error: "ID de produto inválido." }, 400);
-    const atual = await env.DB.prepare("SELECT id FROM produtos WHERE id = ?").bind(id).first();
-    if (!atual) return json({ error: "Produto não encontrado." }, 404);
-    await env.DB.prepare("UPDATE produtos SET nome = ?, preco_padrao = ?, ativo = ? WHERE id = ?")
-      .bind(nome, preco, ativo, id).run();
-    const produto = await env.DB.prepare("SELECT * FROM produtos WHERE id = ?").bind(id).first();
-    return json({ success: true, produto });
+    if (id) {
+      if (!Number.isInteger(id) || id <= 0) return json({ error: "ID de produto inválido." }, 400);
+      const atual = await env.DB.prepare("SELECT id FROM produtos WHERE id = ?").bind(id).first();
+      if (!atual) return json({ error: "Produto não encontrado." }, 404);
+      await env.DB.prepare("UPDATE produtos SET nome = ?, preco_padrao = ?, ativo = ? WHERE id = ?")
+        .bind(nome, preco, ativo, id).run();
+      const produto = await env.DB.prepare("SELECT * FROM produtos WHERE id = ?").bind(id).first();
+      return json({ success: true, produto });
+    }
+
+    const res = await env.DB.prepare("INSERT INTO produtos (nome, preco_padrao, ativo, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)")
+      .bind(nome, preco, ativo).run();
+    const produto = await env.DB.prepare("SELECT * FROM produtos WHERE id = ?").bind(res.meta.last_row_id).first();
+    return json({ success: true, produto }, 201);
+  } catch (err) {
+    return json({
+      error: id ? "Erro ao atualizar produto" : "Erro ao cadastrar produto",
+      detalhe: err?.message || String(err),
+    }, 500);
   }
-
-  const res = await env.DB.prepare("INSERT INTO produtos (nome, preco_padrao, ativo, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)")
-    .bind(nome, preco, ativo).run();
-  const produto = await env.DB.prepare("SELECT * FROM produtos WHERE id = ?").bind(res.meta.last_row_id).first();
-  return json({ success: true, produto }, 201);
 }
 
 async function criarVisita(request, env, user) {
@@ -900,7 +907,7 @@ if (url.pathname === "/api/sync" && request.method === "POST") {
     if (url.pathname === "/api/produtos" && request.method === "GET") return listarProdutos(request, env, user);
     if (url.pathname === "/api/produtos" && request.method === "POST") return gerirProduto(request, env, user);
     if (url.pathname.startsWith("/api/produtos/") && request.method === "PUT") {
-      return gerirProduto(request, env, user, Number(url.pathname.split("/").pop()));
+      return await gerirProduto(request, env, user, Number(url.pathname.split("/").pop()));
     }
     if (url.pathname === "/api/visitas" && request.method === "GET") return listarVisitas(request, env, user);
     if (url.pathname === "/api/visitas" && request.method === "POST") return criarVenda(request, env, user);
