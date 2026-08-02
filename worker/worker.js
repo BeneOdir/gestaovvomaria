@@ -397,26 +397,40 @@ async function listarProdutos(request, env, user) {
   return json(result.results || []);
 }
 
+function converterPrecoProduto(valor) {
+  if (typeof valor === "number") return valor;
+  const texto = normalizeText(valor).replace(/\s/g, "");
+  if (!texto) return Number.NaN;
+  const normalizado = texto.includes(",")
+    ? texto.replace(/\./g, "").replace(",", ".")
+    : texto;
+  return Number(normalizado);
+}
+
 async function gerirProduto(request, env, user, id = null) {
   if (user.role !== "admin") return json({ error: "Acesso restrito ao administrador" }, 403);
   const d = await request.json();
   const nome = normalizeText(d.nome);
-  const preco = Number(d.preco ?? d.preco_padrao);
-  const ativo = d.ativo === false || d.ativo === 0 || d.ativo === "0" || d.ativo === "inativo" ? 0 : 1;
+  const preco = converterPrecoProduto(d.preco_padrao ?? d.preco);
+  const situacao = d.ativo ?? d.status;
+  const ativo = situacao === false || situacao === 0 || situacao === "0" || situacao === "inativo" ? 0 : 1;
   if (!nome) return json({ error: "Informe o nome do produto." }, 400);
   if (!Number.isFinite(preco) || preco < 0) return json({ error: "Informe um preço válido e não negativo." }, 400);
 
   if (id) {
+    if (!Number.isInteger(id) || id <= 0) return json({ error: "ID de produto inválido." }, 400);
     const atual = await env.DB.prepare("SELECT id FROM produtos WHERE id = ?").bind(id).first();
     if (!atual) return json({ error: "Produto não encontrado." }, 404);
     await env.DB.prepare("UPDATE produtos SET nome = ?, preco_padrao = ?, ativo = ? WHERE id = ?")
       .bind(nome, preco, ativo, id).run();
-    return json({ success: true, produto: { id, nome, preco_padrao: preco, ativo } });
+    const produto = await env.DB.prepare("SELECT * FROM produtos WHERE id = ?").bind(id).first();
+    return json({ success: true, produto });
   }
 
   const res = await env.DB.prepare("INSERT INTO produtos (nome, preco_padrao, ativo, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)")
     .bind(nome, preco, ativo).run();
-  return json({ success: true, produto: { id: res.meta.last_row_id, nome, preco_padrao: preco, ativo } }, 201);
+  const produto = await env.DB.prepare("SELECT * FROM produtos WHERE id = ?").bind(res.meta.last_row_id).first();
+  return json({ success: true, produto }, 201);
 }
 
 async function criarVisita(request, env, user) {

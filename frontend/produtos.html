@@ -16,7 +16,7 @@
   <section class="card"><h1>Produtos</h1><p class="muted">Cadastro, preço e situação dos produtos.</p><div id="status" class="status">Carregando...</div>
     <form id="formProduto"><input id="produto_id" type="hidden"><div class="grid">
       <input id="nome" required placeholder="Nome do produto">
-      <input id="preco" required type="number" min="0" step="0.01" placeholder="Preço">
+      <input id="preco" required type="text" inputmode="decimal" placeholder="Preço: 70,00">
       <select id="ativo"><option value="1">Ativo</option><option value="0">Inativo</option></select>
     </div><button class="btn" type="submit">Salvar produto</button></form>
   </section>
@@ -29,10 +29,11 @@ if(!token){location.href="login.html"}else if(role!=="admin"){alert("Acesso rest
 let produtos=[];
 function dinheiro(v){return Number(v||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"})}
 function status(msg,tipo=""){const el=document.getElementById("status");el.textContent=msg;el.className="status "+tipo}
-async function api(path,opcoes={}){const r=await fetch(API_URL+path,{...opcoes,headers:{"Content-Type":"application/json","Authorization":"Bearer "+token,...opcoes.headers}});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||"Erro na API");return d}
+async function api(path,opcoes={}){let r;try{r=await fetch(API_URL+path,{...opcoes,headers:{"Content-Type":"application/json","Authorization":"Bearer "+token,...opcoes.headers}})}catch(e){throw new Error(`Falha de conexão com a API: ${e.message}`)}const texto=await r.text();let d={};try{d=texto?JSON.parse(texto):{}}catch{d={error:texto||"Resposta inválida da API"}}if(!r.ok)throw new Error(`HTTP ${r.status}: ${d.error||d.message||d.detalhe||"Erro na API"}`);return d}
+function normalizarProduto(p){return{...p,id:Number(p.id),preco_padrao:Number(p.preco_padrao??p.preco??0),ativo:Number(p.ativo)===1?"1":"0"}}
 function render(){document.getElementById("lista").innerHTML=produtos.map(p=>`<article class="card produto"><div><strong>${p.nome}</strong><br><span class="muted">${dinheiro(p.preco_padrao)} · ${Number(p.ativo)===1?"Ativo":"Inativo"}</span></div><button class="btn" type="button" data-id="${p.id}">Editar</button></article>`).join("")||'<div class="card">Nenhum produto.</div>';document.querySelectorAll("[data-id]").forEach(b=>b.onclick=()=>editar(Number(b.dataset.id)))}
 function editar(id){const p=produtos.find(x=>Number(x.id)===id);if(!p){status("Produto não encontrado.","err");return}document.getElementById("produto_id").value=p.id;document.getElementById("nome").value=p.nome;document.getElementById("preco").value=p.preco_padrao;document.getElementById("ativo").value=p.ativo;scrollTo({top:0,behavior:"smooth"})}
-async function carregar(){try{const resposta=await api("/api/produtos?todos=1");produtos=(Array.isArray(resposta)?resposta:[]).map(p=>({ ...p,id:Number(p.id),preco_padrao:Number(p.preco_padrao??p.preco??0),ativo:Number(p.ativo)===1?"1":"0" }));render();status(`${produtos.length} produto(s).`,"ok")}catch(e){status(e.message,"err")}}
-document.getElementById("formProduto").onsubmit=async e=>{e.preventDefault();const id=document.getElementById("produto_id").value;const body={nome:document.getElementById("nome").value.trim(),preco:Number(document.getElementById("preco").value),ativo:Number(document.getElementById("ativo").value)};try{await api(id?`/api/produtos/${id}`:"/api/produtos",{method:id?"PUT":"POST",body:JSON.stringify(body)});e.target.reset();document.getElementById("produto_id").value="";await carregar()}catch(err){status(err.message,"err")}};
+async function carregar(){try{const resposta=await api("/api/produtos?todos=1");produtos=(Array.isArray(resposta)?resposta:[]).map(normalizarProduto);render();status(`${produtos.length} produto(s).`,"ok")}catch(e){status(e.message,"err")}}
+document.getElementById("formProduto").onsubmit=async e=>{e.preventDefault();const id=Number(document.getElementById("produto_id").value||0);const body={nome:document.getElementById("nome").value.trim(),preco_padrao:document.getElementById("preco").value.trim(),ativo:Number(document.getElementById("ativo").value)};try{const resposta=await api(id?`/api/produtos/${id}`:"/api/produtos",{method:id?"PUT":"POST",body:JSON.stringify(body)});const produto=normalizarProduto(resposta.produto);if(id)produtos=produtos.map(p=>p.id===id?produto:p);else produtos.push(produto);produtos.sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR"));render();e.target.reset();document.getElementById("produto_id").value="";status(id?"Produto atualizado.":"Produto cadastrado.","ok")}catch(err){status(err.message,"err")}};
 carregar();
 </script></body></html>
