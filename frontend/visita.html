@@ -466,7 +466,7 @@
 
     <div class="group">
       <label>Desconto</label>
-      <input id="desconto" type="number" step="0.01" min="0" value="0">
+      <input id="desconto" type="text" inputmode="decimal" value="R$ 0,00">
     </div>
 
     <h3>Produtos</h3>
@@ -487,6 +487,7 @@
   <button class="btn muted" id="btnSair" type="button">Sair</button>
 </div>
 
+<script src="moeda.js"></script>
 <script>
 const API_URL = "https://gestaovomaria-api.odir-bene12.workers.dev";
 
@@ -515,12 +516,7 @@ function setStatus(msg, tipo="warn"){
   el.className = "status " + tipo;
 }
 
-function dinheiro(v){
-  return Number(v || 0).toLocaleString("pt-BR", {
-    style:"currency",
-    currency:"BRL"
-  });
-}
+const dinheiro=formatarMoedaBR;
 
 function apenasNumeros(v){
   return String(v || "").replace(/\D/g, "");
@@ -1115,7 +1111,7 @@ function addItem(){
       </div>
       <div class="group">
         <label>Preço unitário</label>
-        <input class="preco" type="number" step="0.01" min="0" placeholder="0,00">
+        <input class="preco" type="text" inputmode="decimal" placeholder="R$ 0,00">
       </div>
     </div>
   `;
@@ -1128,12 +1124,14 @@ function addItem(){
 
   produtoSelect.addEventListener("change", () => {
     const opt = produtoSelect.selectedOptions[0];
-    precoInput.value = opt?.dataset?.preco || 0;
+    precoInput.value = formatarMoedaBR(opt?.dataset?.preco || 0);
     atualizarTotal();
   });
 
   qtdInput.addEventListener("input", atualizarTotal);
   precoInput.addEventListener("input", atualizarTotal);
+  aplicarMascaraMoeda(precoInput);
+  precoInput.value=formatarMoedaBR(0);
 
   div.querySelector(".remove-item").addEventListener("click", () => {
     const totalItens = document.querySelectorAll(".item").length;
@@ -1160,7 +1158,7 @@ function coletarItens(){
         produto_id: sel.value ? Number(sel.value) : null,
         produto_nome: opt && sel.value ? opt.textContent.trim() : "",
         quantidade: Number(div.querySelector(".qtd").value || 0),
-        preco_unitario: Number(div.querySelector(".preco").value || 0)
+        preco_unitario: parseMoedaBR(div.querySelector(".preco").value)
       };
     })
     .filter(item => item.quantidade > 0 && item.produto_nome);
@@ -1169,23 +1167,25 @@ function coletarItens(){
 function adicionarPagamento(forma="dinheiro", valor=0){
   const linha=document.createElement("div");
   linha.className="pagamento-linha";
-  linha.innerHTML=`<label>Forma<select class="pagamento-forma"><option value="dinheiro">Dinheiro</option><option value="pix">Pix</option><option value="cartao">Cartão</option><option value="prazo">Prazo</option></select></label><label>Valor<input class="pagamento-valor" type="number" min="0" step="0.01" value="${Number(valor)||0}"></label><button class="remove-item remover-pagamento" type="button">Remover</button>`;
+  linha.innerHTML=`<label>Forma<select class="pagamento-forma"><option value="dinheiro">Dinheiro</option><option value="pix">Pix</option><option value="cartao">Cartão</option><option value="prazo">Prazo</option></select></label><label>Valor<input class="pagamento-valor" type="text" inputmode="decimal" value="${formatarMoedaBR(valor)}"></label><button class="remove-item remover-pagamento" type="button">Remover</button>`;
   linha.querySelector(".pagamento-forma").value=forma;
   linha.querySelectorAll("select,input").forEach(campo=>campo.addEventListener("input",atualizarTotal));
+  aplicarMascaraMoeda(linha.querySelector(".pagamento-valor"));
   linha.querySelector(".remover-pagamento").onclick=()=>{linha.remove();atualizarTotal()};
   document.getElementById("pagamentos").appendChild(linha);
   atualizarTotal();
 }
 
-function coletarPagamentos(){return [...document.querySelectorAll(".pagamento-linha")].map(linha=>({forma:linha.querySelector(".pagamento-forma").value,valor:Number(linha.querySelector(".pagamento-valor").value)}))}
+function coletarPagamentos(){return [...document.querySelectorAll(".pagamento-linha")].map(linha=>({forma:linha.querySelector(".pagamento-forma").value,valor:parseMoedaBR(linha.querySelector(".pagamento-valor").value)}))}
 
-function totalLiquidoAtual(){const subtotal=coletarItens().reduce((soma,item)=>soma+(item.quantidade*item.preco_unitario),0);return Math.max(0,subtotal-Number(document.getElementById("desconto").value||0))}
+function totalLiquidoAtual(){const subtotal=coletarItens().reduce((soma,item)=>soma+(item.quantidade*item.preco_unitario),0);const desconto=parseMoedaBR(document.getElementById("desconto").value);return Math.max(0,subtotal-(Number.isFinite(desconto)?desconto:0))}
 
 function atualizarTotal(){
   const subtotal = coletarItens().reduce((soma, item) =>
     soma + (item.quantidade * item.preco_unitario), 0
   );
-  const desconto = Number(document.getElementById("desconto").value || 0);
+  const descontoInformado=parseMoedaBR(document.getElementById("desconto").value);
+  const desconto = Number.isFinite(descontoInformado)?descontoInformado:0;
   const total = Math.max(0, subtotal - desconto);
 
   document.getElementById("totalEstimado").textContent =
@@ -1343,6 +1343,7 @@ document.addEventListener("click", event => {
 document.getElementById("btnAddItem").addEventListener("click", addItem);
 document.getElementById("btnAddPagamento").addEventListener("click", ()=>adicionarPagamento());
 document.getElementById("desconto").addEventListener("input", atualizarTotal);
+aplicarMascaraMoeda(document.getElementById("desconto"));
 
 document.getElementById("comprou").addEventListener("change", function(){
   const comprou = this.value === "sim";
@@ -1368,6 +1369,10 @@ document.getElementById("visitaForm").addEventListener("submit", async event => 
     setStatus("Adicione pelo menos um produto com quantidade maior que zero.", "err");
     return;
   }
+  if(itens.some(item=>!Number.isFinite(item.preco_unitario)||item.preco_unitario<0)){setStatus("Informe preços unitários válidos e não negativos.","err");return}
+  const campoDesconto=document.getElementById("desconto");
+  const desconto=campoDesconto.value.trim()?parseMoedaBR(campoDesconto.value):0;
+  if(!Number.isFinite(desconto)||desconto<0){setStatus("Informe um desconto válido e não negativo.","err");return}
   const formas=pagamentos.map(p=>p.forma);
   const totalPagamentos=pagamentos.reduce((soma,p)=>soma+p.valor,0);
   const totalVenda=totalLiquidoAtual();
@@ -1386,7 +1391,7 @@ document.getElementById("visitaForm").addEventListener("submit", async event => 
     observacoes: document.getElementById("observacoes").value.trim(),
     pagamentos,
     situacao_pagamento: situacao,
-    desconto: Number(document.getElementById("desconto").value || 0),
+    desconto,
     itens
   };
 
