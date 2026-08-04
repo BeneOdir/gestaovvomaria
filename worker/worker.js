@@ -682,15 +682,45 @@ async function criarVenda(request, env, user) {
   });
 }
 
+// Comissão estimada por fardo. Este é o único valor a alterar quando a regra comercial mudar.
+const COMISSAO_POR_FARDO = 1.75;
+
 async function relatorioPeriodo(request, env, user, somenteTeste = false) {
   const url = new URL(request.url);
   const hoje = new Date().toISOString().slice(0, 10);
   const dataInicial = url.searchParams.get("data_inicial") || url.searchParams.get("data") || hoje;
   const dataFinal = url.searchParams.get("data_final") || url.searchParams.get("data") || dataInicial;
+  const visaoSolicitada = normalizeText(url.searchParams.get("visao") || (user.role === "admin" ? "geral" : "vendedor")).toLowerCase();
+  const origem = normalizeText(url.searchParams.get("origem") || "todos").toLowerCase();
+  const vendedorInformado = normalizeText(url.searchParams.get("vendedor_id"));
+  const dataValida = valor => /^\d{4}-\d{2}-\d{2}$/.test(valor) && !Number.isNaN(Date.parse(`${valor}T00:00:00Z`));
+  if (!dataValida(dataInicial) || !dataValida(dataFinal)) return json({ error: "Período inválido. Use AAAA-MM-DD." }, 400);
   if (dataInicial > dataFinal) return json({ error: "A data inicial deve ser anterior à data final." }, 400);
-  const filtro = user.role === "admin" ? "" : " AND v.vendedor_id = ?";
+  if (!['geral', 'vendedor'].includes(visaoSolicitada)) return json({ error: "Visão de relatório inválida." }, 400);
+  if (!['todos', 'administracao', 'vendedores'].includes(origem)) return json({ error: "Origem inválida." }, 400);
+  if (vendedorInformado && (!/^\d+$/.test(vendedorInformado) || Number(vendedorInformado) <= 0)) return json({ error: "vendedor_id inválido." }, 400);
+
+  let visao = visaoSolicitada;
+  let vendedorId = vendedorInformado ? Number(vendedorInformado) : null;
+  if (user.role !== "admin") {
+    if (vendedorId && vendedorId !== Number(user.vendedorId)) return json({ error: "Você não pode consultar outro vendedor." }, 403);
+    visao = "vendedor";
+    vendedorId = Number(user.vendedorId);
+  } else if (visao === "vendedor" && !vendedorId) {
+    return json({ error: "Selecione um vendedor." }, 400);
+  }
+
+  let vendedorSelecionado = null;
+  if (vendedorId) {
+    vendedorSelecionado = await env.DB.prepare("SELECT id, nome, role, status FROM vendedores WHERE id = ?").bind(vendedorId).first();
+    if (!vendedorSelecionado) return json({ error: "Vendedor não encontrado." }, 404);
+  }
+
+  let filtro = vendedorId ? " AND v.vendedor_id = ?" : "";
+  if (user.role === "admin" && visao === "geral" && origem === "administracao") filtro += " AND EXISTS (SELECT 1 FROM vendedores vo WHERE vo.id = v.vendedor_id AND vo.role = 'admin')";
+  if (user.role === "admin" && visao === "geral" && origem === "vendedores") filtro += " AND EXISTS (SELECT 1 FROM vendedores vo WHERE vo.id = v.vendedor_id AND COALESCE(vo.role, 'vendedor') <> 'admin')";
   const filtroTeste = filtroRegistroTeste("v", somenteTeste);
-  const params = user.role === "admin" ? [dataInicial, dataFinal] : [dataInicial, dataFinal, user.vendedorId];
+  const params = vendedorId ? [dataInicial, dataFinal, vendedorId] : [dataInicial, dataFinal];
 
   const resumo = await env.DB.prepare(`
     SELECT COUNT(*) AS visitas,
@@ -717,14 +747,17 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
   const formas = await env.DB.prepare(`
     SELECT COALESCE(NULLIF(v.forma_pagamento, ''), 'não informado') AS forma_pagamento,
       COUNT(*) AS vendas, COALESCE(SUM(v.valor_total), 0) AS total,
-      COALESCE(SUM(v.valor_recebido), 0) AS recebido
+      COALESCE(SUM(v.valor_recebido), 0) AS recebido,
+      COALESCE(SUM(v.valor_total - v.valor_recebido), 0) AS pendente
     FROM visitas v WHERE v.comprou = 'sim' AND v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
     GROUP BY COALESCE(NULLIF(v.forma_pagamento, ''), 'não informado') ORDER BY total DESC
   `).bind(...params).all();
 
   const visitas = await env.DB.prepare(`
     SELECT v.*, COALESCE(c.nome_fantasia, c.razao_social, c.nome_estabelecimento,
-      ca.nome_estabelecimento, 'Consumidor') AS cliente_nome, vd.nome AS vendedor_nome
+      ca.nome_estabelecimento, 'Consumidor') AS cliente_nome,
+      CASE WHEN vd.role = 'admin' THEN 'Administração / Loja' ELSE COALESCE(vd.nome, 'Vendedor') END AS vendedor_nome,
+      CASE WHEN vd.role = 'admin' THEN 'administracao' ELSE 'vendedor' END AS origem
     FROM visitas v LEFT JOIN clientes c ON c.id = v.cliente_id
     LEFT JOIN clientes_avulsos ca ON ca.id = v.cliente_avulso_id
     LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
@@ -740,9 +773,10 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
     ORDER BY vi.visita_id DESC, vi.id
   `).bind(...params).all();
 
-  const resumoVendedores = user.role === "admin"
+  const resumoVendedores = user.role === "admin" && visao === "geral"
     ? await env.DB.prepare(`
-      SELECT v.vendedor_id, COALESCE(vd.nome, 'Vendedor') AS vendedor_nome,
+      SELECT v.vendedor_id,
+        CASE WHEN vd.role = 'admin' THEN 'Administração / Loja' ELSE COALESCE(vd.nome, 'Vendedor') END AS vendedor_nome,
         COUNT(*) AS visitas, SUM(CASE WHEN v.comprou = 'sim' THEN 1 ELSE 0 END) AS vendas,
         COALESCE(SUM(v.valor_total + v.desconto), 0) AS total_bruto,
         COALESCE(SUM(v.desconto), 0) AS descontos,
@@ -750,10 +784,47 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
         COALESCE(SUM(v.valor_recebido), 0) AS total_recebido,
         COALESCE(SUM(v.valor_total - v.valor_recebido), 0) AS total_pendente
       FROM visitas v LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
-      WHERE v.data_visita BETWEEN ? AND ? AND ${filtroTeste}
+      WHERE v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
       GROUP BY v.vendedor_id, vd.nome ORDER BY total_liquido DESC
-    `).bind(dataInicial, dataFinal).all()
+    `).bind(...params).all()
     : { results: [] };
+
+  const fechamentoDinheiro = vendedorId && vendedorSelecionado?.role !== "admin"
+    ? await env.DB.prepare(`
+      SELECT COUNT(*) AS vendas_dinheiro,
+        COALESCE(SUM(v.valor_total), 0) AS total_liquido_dinheiro,
+        COALESCE(SUM(v.valor_recebido), 0) AS valor_recebido_dinheiro,
+        COALESCE(SUM(v.valor_total - v.valor_recebido), 0) AS total_pendente_dinheiro,
+        COALESCE(SUM(v.valor_total - v.valor_recebido), 0) AS diferenca_caixa,
+        COALESCE(SUM(v.valor_recebido), 0) AS valor_a_entregar
+      FROM visitas v WHERE v.comprou = 'sim'
+        AND LOWER(TRIM(COALESCE(v.forma_pagamento, ''))) = 'dinheiro'
+        AND v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
+    `).bind(...params).first()
+    : { vendas_dinheiro: 0, total_liquido_dinheiro: 0, valor_recebido_dinheiro: 0, total_pendente_dinheiro: 0, diferenca_caixa: 0, valor_a_entregar: 0 };
+
+  const outrasFormas = vendedorId && vendedorSelecionado?.role !== "admin"
+    ? await env.DB.prepare(`
+      SELECT COALESCE(NULLIF(v.forma_pagamento, ''), 'não informado') AS forma_pagamento,
+        COUNT(*) AS vendas, COALESCE(SUM(v.valor_total), 0) AS total_liquido,
+        COALESCE(SUM(v.valor_recebido), 0) AS valor_recebido,
+        COALESCE(SUM(v.valor_total - v.valor_recebido), 0) AS valor_pendente
+      FROM visitas v WHERE v.comprou = 'sim'
+        AND LOWER(TRIM(COALESCE(v.forma_pagamento, ''))) <> 'dinheiro'
+        AND v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
+      GROUP BY COALESCE(NULLIF(v.forma_pagamento, ''), 'não informado') ORDER BY total_liquido DESC
+    `).bind(...params).all()
+    : { results: [] };
+
+  const fardos = vendedorId && vendedorSelecionado?.role !== "admin"
+    ? await env.DB.prepare(`
+      SELECT COALESCE(SUM(vi.quantidade), 0) AS total_fardos
+      FROM visita_itens vi INNER JOIN visitas v ON v.id = vi.visita_id
+      LEFT JOIN produtos p ON p.id = vi.produto_id
+      WHERE v.comprou = 'sim' AND LOWER(COALESCE(p.unidade, 'fardo')) = 'fardo'
+        AND v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
+    `).bind(...params).first()
+    : { total_fardos: 0 };
 
   const itensPorVisita = new Map();
   for (const item of itensVendas.results || []) {
@@ -766,8 +837,21 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
     itens: itensPorVisita.get(Number(visita.id)) || []
   }));
 
-  return json({ data_inicial: dataInicial, data_final: dataFinal, registros_teste: somenteTeste, resumo,
+  const resumoVendedor = visao === "vendedor" ? {
+    ...resumo,
+    vendedor_id: vendedorSelecionado?.id || vendedorId,
+    vendedor_nome: vendedorSelecionado?.role === "admin" ? "Administração / Loja" : (vendedorSelecionado?.nome || user.nome),
+    total_fardos: Number(fardos?.total_fardos || 0),
+    comissao_por_fardo: COMISSAO_POR_FARDO,
+    comissao_estimada: vendedorSelecionado?.role === "admin" ? 0 : Number(fardos?.total_fardos || 0) * COMISSAO_POR_FARDO
+  } : null;
+
+  return json({ data_inicial: dataInicial, data_final: dataFinal, registros_teste: somenteTeste,
+    visao, origem, vendedor: vendedorSelecionado, resumo,
+    resumo_geral: visao === "geral" ? resumo : null, resumo_vendedor: resumoVendedor,
+    fechamento_dinheiro: fechamentoDinheiro, outras_formas_pagamento: outrasFormas.results || [],
     formas_pagamento: formas.results || [], resumo_vendedores: resumoVendedores.results || [],
+    resumo_por_vendedor: resumoVendedores.results || [],
     produtos: produtos.results || [], visitas: vendasDetalhadas });
 }
 
