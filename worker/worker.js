@@ -160,6 +160,39 @@ async function listarClientes(env, user) {
 
   return json(result.results || []);
 }
+
+async function obterClientePorId(env, id) {
+  if (!Number.isInteger(id) || id <= 0) return json({ error: "ID de cliente inválido." }, 400);
+
+  const cliente = await env.DB.prepare(`
+    SELECT
+      id, vendedor_id, tipo_pessoa, documento, cnpj, cpf,
+      razao_social, nome_estabelecimento, nome_fantasia,
+      ie, telefone, whatsapp, instagram, email, cep, endereco,
+      cidade, estado, observacoes_gerais, status_comercial,
+      status_cliente, 'cliente' AS tipo_origem
+    FROM clientes
+    WHERE id = ?
+  `).bind(id).first();
+
+  return cliente ? json(cliente) : json({ error: "Cliente não encontrado." }, 404);
+}
+
+async function obterClienteAvulsoPorId(env, id) {
+  if (!Number.isInteger(id) || id <= 0) return json({ error: "ID de cliente avulso inválido." }, 400);
+
+  const cliente = await env.DB.prepare(`
+    SELECT
+      id, vendedor_id, nome_estabelecimento, tipo_pessoa, cpf, cnpj,
+      telefone, whatsapp, cep, endereco, cidade, estado,
+      observacoes_gerais, status_cadastro,
+      'avulso' AS tipo_origem
+    FROM clientes_avulsos
+    WHERE id = ?
+  `).bind(id).first();
+
+  return cliente ? json(cliente) : json({ error: "Cliente avulso não encontrado." }, 404);
+}
 async function criarCliente(request, env, user) {
   const entrada = await request.json();
   const c = montarCliente(entrada, user);
@@ -1001,8 +1034,14 @@ if (url.pathname.startsWith("/api/vendedores/") && request.method === "PUT") {
 
     if (url.pathname === "/api/debug-clientes" && request.method === "GET") return debugClientes(request, env, user);
     if (url.pathname === "/api/clientes" && request.method === "GET") return listarClientes(env, user);
+    if (/^\/api\/clientes\/\d+$/.test(url.pathname) && request.method === "GET") {
+      return obterClientePorId(env, Number(url.pathname.split("/").pop()));
+    }
     if (url.pathname === "/api/clientes" && request.method === "POST") return criarCliente(request, env, user);
     if (url.pathname === "/api/clientes-avulsos" && request.method === "GET") return listarClientesAvulsos(env);
+    if (/^\/api\/clientes-avulsos\/\d+$/.test(url.pathname) && request.method === "GET") {
+      return obterClienteAvulsoPorId(env, Number(url.pathname.split("/").pop()));
+    }
     if (url.pathname === "/api/clientes-avulsos" && request.method === "POST") return criarClienteAvulso(request, env, user);
     if (url.pathname === "/api/sync" && request.method === "GET") {
   return json({ status: "ok", rota: "/api/sync", metodo: "use POST" });

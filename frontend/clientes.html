@@ -43,8 +43,19 @@
     .mini-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
     .card-actions{display:grid;grid-template-columns:1fr;gap:8px;margin-top:10px}
     .btn-mini{display:block;text-align:center;text-decoration:none;border:0;border-radius:999px;padding:9px 10px;font-weight:900;font-size:12px;background:#EA580C;color:white}
+    .btn-mini.secondary{background:#7C2D12}
     .count-box{border:1px solid #FED7AA;border-radius:18px;padding:10px;margin-top:12px;background:#FFF7ED;font-size:13px;color:#7C2D12}
-    @media(max-width:620px){.grid2,.actions{grid-template-columns:1fr}.top{flex-direction:column;text-align:center}.logo{width:130px;height:130px}}
+    .modal-backdrop{position:fixed;inset:0;z-index:1000;background:rgba(67,20,7,.58);display:flex;align-items:center;justify-content:center;padding:14px}
+    .modal-backdrop.hidden{display:none}
+    .details-panel{width:min(680px,100%);max-height:calc(100vh - 28px);overflow-y:auto;background:#fff;border-radius:22px;padding:18px;box-shadow:0 18px 48px rgba(0,0,0,.28)}
+    .details-panel h2{color:#78350F;font-size:21px;margin-bottom:12px}
+    .details-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+    .detail-item{border:1px solid #FED7AA;border-radius:14px;padding:9px;background:#FFF7ED;overflow-wrap:anywhere}
+    .detail-item .detail-label{display:block;font-size:11px;font-weight:900;color:#9A3412;margin-bottom:3px;text-transform:uppercase}
+    .detail-item.highlight{border-width:2px;background:#FFFBEB;font-size:15px}
+    .modal-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+    .copy-message{min-height:22px;margin-top:9px;text-align:center;color:#065F46;font-weight:800}
+    @media(max-width:620px){.grid2,.actions,.details-grid,.modal-actions{grid-template-columns:1fr}.top{flex-direction:column;text-align:center}.logo{width:130px;height:130px}.details-panel{padding:14px}.card-actions{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
@@ -208,6 +219,20 @@
   <div id="listaClientes"></div>
 </div>
 
+<div id="modalCliente" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="tituloModalCliente">
+  <div class="details-panel">
+    <h2 id="tituloModalCliente">Dados do cliente</h2>
+    <div id="detalhesCliente" class="details-grid"></div>
+    <div id="mensagemCopia" class="copy-message" aria-live="polite"></div>
+    <div class="modal-actions">
+      <button class="btn primary" id="btnCopiarNFe" type="button">Copiar dados para NFe</button>
+      <button class="btn dark" id="btnCopiarBoleto" type="button">Copiar dados para boleto</button>
+      <button class="btn soft" id="btnEditarCliente" type="button" disabled title="Edição segura ainda não disponível">Editar cadastro</button>
+      <button class="btn muted" id="btnFecharModal" type="button">Fechar</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const API_URL = "https://gestaovomaria-api.odir-bene12.workers.dev";
 const vendedorRole = localStorage.getItem("vendedorRole") || "vendedor";
@@ -224,6 +249,8 @@ let vendedorId = localStorage.getItem("vendedorId");
 let vendedorNome = localStorage.getItem("vendedorNome") || "Usuário";
 let ultimaListaClientes = [];
 let ultimaOrigemClientes = "clientes locais deste aparelho";
+let clientesExibidos = [];
+let clienteDetalhado = null;
 
 if(!token){
   alert("Faça login primeiro.");
@@ -448,13 +475,16 @@ function renderClientesFiltrados(){
   }
 
   if(!lista.length){
+    clientesExibidos = [];
     el.innerHTML = `<div class="client-card">Nenhum cliente encontrado em ${ultimaOrigemClientes} com os filtros atuais.</div>`;
     return;
   }
 
+  clientesExibidos = lista;
+
   el.innerHTML = `
     <div class="count-box"><strong>${lista.length}</strong> cliente(s) encontrado(s) em ${ultimaOrigemClientes}.</div>
-    ${lista.map(c=>{
+    ${lista.map((c, indice)=>{
       const nome = c.nome_fantasia || c.razao_social || c.nome_estabelecimento || "Cliente";
       const origemNuvem = String(ultimaOrigemClientes).includes("nuvem");
       const idCliente = c.id || c.cliente_id || "";
@@ -470,11 +500,120 @@ function renderClientesFiltrados(){
         <span class="pill">${avulso ? "CADASTRO INCOMPLETO" : (c.status_comercial || "prospect")}</span>
         <span class="pill">${avulso ? "cliente avulso" : (c.status_cliente || "ativo")}</span>
         <span class="pill">${c.sync_status || (origemNuvem ? "nuvem" : "pendente")} ${idCliente ? `· ${avulso ? "ID AVULSO" : "ID CLIENTE"}: ${idCliente}` : ""}</span>
-        ${origemNuvem && idCliente ? `<div class="card-actions"><a class="btn-mini" href="${visitaUrl}">Registrar visita/venda</a></div>` : ""}
+        <div class="card-actions">
+          <button class="btn-mini secondary" type="button" onclick="abrirDadosCliente(${indice})">Ver dados do cliente</button>
+          ${origemNuvem && idCliente ? `<a class="btn-mini" href="${visitaUrl}">Registrar visita/venda</a>` : ""}
+        </div>
       </div>`;
     }).join("")}
   `;
 }
+
+function valorCliente(c, ...campos){
+  for(const campo of campos){
+    const valor = c?.[campo];
+    if(valor !== undefined && valor !== null && String(valor).trim()) return String(valor).trim();
+  }
+  return "Não informado";
+}
+
+function escaparHtml(valor){
+  return String(valor).replace(/[&<>"']/g, caractere => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"})[caractere]);
+}
+
+function dadosNormalizados(c){
+  const avulso = c.tipo_origem === "avulso";
+  return {
+    id: valorCliente(c, "id", "cliente_id"),
+    razaoSocial: valorCliente(c, "razao_social", "nome_estabelecimento"),
+    nomeFantasia: valorCliente(c, "nome_fantasia"),
+    tipoPessoa: valorCliente(c, "tipo_pessoa"),
+    cnpj: valorCliente(c, "cnpj"), cpf: valorCliente(c, "cpf"),
+    ie: valorCliente(c, "ie"), telefone: valorCliente(c, "telefone"),
+    whatsapp: valorCliente(c, "whatsapp"), email: valorCliente(c, "email"),
+    instagram: valorCliente(c, "instagram"), cep: valorCliente(c, "cep"),
+    endereco: valorCliente(c, "endereco"), numero: valorCliente(c, "numero"),
+    complemento: valorCliente(c, "complemento"), bairro: valorCliente(c, "bairro"),
+    cidade: valorCliente(c, "cidade"), estado: valorCliente(c, "estado"),
+    observacoes: valorCliente(c, "observacoes_gerais", "observacoes"),
+    statusComercial: valorCliente(c, "status_comercial"),
+    statusCliente: valorCliente(c, "status_cliente", "status_cadastro"),
+    origem: avulso ? "Cliente avulso" : (String(ultimaOrigemClientes).includes("nuvem") ? "Cliente formal · nuvem" : "Cliente formal · local")
+  };
+}
+
+function renderDetalhesCliente(c){
+  clienteDetalhado = dadosNormalizados(c);
+  const campos = [
+    ["ID", "id"], ["Razão social ou nome", "razaoSocial"], ["Nome fantasia", "nomeFantasia"],
+    ["Tipo de pessoa", "tipoPessoa"], ["CNPJ", "cnpj", true], ["CPF", "cpf", true],
+    ["Inscrição estadual", "ie"], ["Telefone", "telefone", true], ["WhatsApp", "whatsapp", true],
+    ["E-mail", "email"], ["Instagram", "instagram"], ["CEP", "cep"],
+    ["Endereço", "endereco", true], ["Número", "numero"], ["Complemento", "complemento"],
+    ["Bairro", "bairro"], ["Cidade", "cidade"], ["Estado", "estado"],
+    ["Observações", "observacoes"], ["Status comercial", "statusComercial"],
+    ["Status do cliente", "statusCliente"], ["Origem", "origem"]
+  ];
+  document.getElementById("detalhesCliente").innerHTML = campos.map(([rotulo, chave, destaque]) =>
+    `<div class="detail-item${destaque ? " highlight" : ""}"><span class="detail-label">${rotulo}</span>${escaparHtml(clienteDetalhado[chave])}</div>`
+  ).join("");
+  document.getElementById("mensagemCopia").textContent = "";
+  document.getElementById("modalCliente").classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+}
+
+async function abrirDadosCliente(indice){
+  const resumo = clientesExibidos[indice];
+  if(!resumo) return;
+  const id = Number(resumo.id || resumo.cliente_id || 0);
+  const origemNuvem = String(ultimaOrigemClientes).includes("nuvem");
+  if(!origemNuvem || !id){ renderDetalhesCliente(resumo); return; }
+
+  setStatus("Carregando dados completos do cliente...", "warn");
+  try{
+    const recurso = resumo.tipo_origem === "avulso" ? "clientes-avulsos" : "clientes";
+    const resp = await fetch(`${API_URL}/api/${recurso}/${id}`, { headers:{ "Authorization":`Bearer ${token}` } });
+    const dados = await resp.json().catch(() => ({}));
+    if(!resp.ok) throw new Error(dados.error || "Não foi possível consultar o cliente.");
+    renderDetalhesCliente({ ...dados, tipo_origem: resumo.tipo_origem || dados.tipo_origem });
+    setStatus("Dados completos do cliente carregados.", "ok");
+  }catch(err){ setStatus(err.message, "err"); }
+}
+
+function fecharDadosCliente(){
+  document.getElementById("modalCliente").classList.add("hidden");
+  document.body.style.overflow = "";
+}
+
+async function copiarTexto(texto){
+  try{
+    if(navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(texto);
+    else{
+      const area = document.createElement("textarea");
+      area.value = texto; area.style.position = "fixed"; area.style.opacity = "0";
+      document.body.appendChild(area); area.focus(); area.select();
+      if(!document.execCommand("copy")) throw new Error("Falha ao copiar");
+      area.remove();
+    }
+    document.getElementById("mensagemCopia").textContent = "Dados copiados com sucesso.";
+  }catch{
+    document.getElementById("mensagemCopia").textContent = "Não foi possível copiar os dados.";
+  }
+}
+
+function documentoDetalhe(d){ return d.cnpj !== "Não informado" ? d.cnpj : d.cpf; }
+function cidadeUf(d){ return `${d.cidade}/${d.estado}`; }
+document.getElementById("btnCopiarNFe").addEventListener("click", ()=>{
+  const d = clienteDetalhado; if(!d) return;
+  copiarTexto([`Razão social: ${d.razaoSocial}`, `Nome fantasia: ${d.nomeFantasia}`, `CNPJ/CPF: ${documentoDetalhe(d)}`, `Inscrição estadual: ${d.ie}`, `CEP: ${d.cep}`, `Endereço: ${d.endereco}`, `Número: ${d.numero}`, `Complemento: ${d.complemento}`, `Bairro: ${d.bairro}`, `Cidade/UF: ${cidadeUf(d)}`, `Telefone: ${d.telefone}`, `E-mail: ${d.email}`].join("\n"));
+});
+document.getElementById("btnCopiarBoleto").addEventListener("click", ()=>{
+  const d = clienteDetalhado; if(!d) return;
+  copiarTexto([`Cliente: ${d.nomeFantasia !== "Não informado" ? d.nomeFantasia : d.razaoSocial}`, `CNPJ/CPF: ${documentoDetalhe(d)}`, `Endereço: ${d.endereco}`, `Número: ${d.numero}`, `Bairro: ${d.bairro}`, `Cidade/UF: ${cidadeUf(d)}`, `CEP: ${d.cep}`, `Telefone: ${d.telefone}`, `E-mail: ${d.email}`].join("\n"));
+});
+document.getElementById("btnFecharModal").addEventListener("click", fecharDadosCliente);
+document.getElementById("modalCliente").addEventListener("click", e=>{ if(e.target.id === "modalCliente") fecharDadosCliente(); });
+document.addEventListener("keydown", e=>{ if(e.key === "Escape") fecharDadosCliente(); });
 
 async function listarClientes(origem="local", documentoFiltro=null){
   let lista = await db.clientes.toArray();
