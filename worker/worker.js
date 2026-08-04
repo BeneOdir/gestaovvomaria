@@ -604,7 +604,6 @@ async function criarVenda(request, env, user) {
   const dataVisita = normalizeText(d.data_visita || new Date().toISOString().slice(0, 10));
   const comprou = d.comprou === "sim" || d.comprou === true ? "sim" : "nao";
   const observacoes = normalizeText(d.observacoes);
-  const formaPagamento = normalizeText(d.forma_pagamento || "não informado").toLowerCase();
   const desconto = Number(d.desconto || 0);
   const itensEntrada = Array.isArray(d.itens)
     ? d.itens
@@ -641,9 +640,27 @@ async function criarVenda(request, env, user) {
   const subtotal = comprou === "sim" ? itens.reduce((soma, item) => soma + item.subtotal, 0) : 0;
   if (desconto > subtotal) return json({ error: "O desconto não pode superar o subtotal." }, 400);
   const valorTotal = subtotal - desconto;
-  const recebidoInformado = Number(d.valor_recebido ?? valorTotal);
-  if (!Number.isFinite(recebidoInformado) || recebidoInformado < 0) return json({ error: "Valor recebido inválido." }, 400);
-  const valorRecebido = Math.min(recebidoInformado, valorTotal);
+  const formasPermitidas = new Set(["dinheiro", "pix", "cartao", "prazo"]);
+  const pagamentosEntrada = Array.isArray(d.pagamentos)
+    ? d.pagamentos
+    : (comprou === "sim" ? [{ forma: d.forma_pagamento || "não informado", valor: d.valor_recebido ?? valorTotal }] : []);
+  const pagamentos = pagamentosEntrada.map(pagamento => ({
+    forma: normalizeText(pagamento.forma || pagamento.forma_pagamento).toLowerCase(),
+    valor: Number(pagamento.valor)
+  }));
+  if (comprou === "sim" && !pagamentos.length) return json({ error: "Informe ao menos uma forma de pagamento." }, 400);
+  if (pagamentos.some(p => !formasPermitidas.has(p.forma))) return json({ error: "Forma de pagamento inválida." }, 400);
+  if (pagamentos.some(p => !Number.isFinite(p.valor) || p.valor < 0)) return json({ error: "Os valores dos pagamentos devem ser numéricos e não negativos." }, 400);
+  if (new Set(pagamentos.map(p => p.forma)).size !== pagamentos.length) return json({ error: "Não repita a mesma forma de pagamento." }, 400);
+  const totalPagamentos = pagamentos.reduce((soma, pagamento) => soma + pagamento.valor, 0);
+  if (totalPagamentos > valorTotal + 0.005) return json({ error: "A soma dos pagamentos não pode superar o total líquido." }, 400);
+  const situacaoInformada = normalizeText(d.situacao_pagamento).toLowerCase();
+  const permiteDiferenca = pagamentos.some(p => p.forma === "prazo") || ["parcial", "pendente"].includes(situacaoInformada);
+  if (comprou === "sim" && totalPagamentos < valorTotal - 0.005 && !permiteDiferenca) {
+    return json({ error: "A soma menor que o total exige uma parcela em prazo ou situação parcial/pendente." }, 400);
+  }
+  const valorRecebido = pagamentos.filter(p => p.forma !== "prazo").reduce((soma, pagamento) => soma + pagamento.valor, 0);
+  const formaPagamento = pagamentos.length ? pagamentos.map(p => p.forma).join(" + ") : "não informado";
   const situacaoPagamento = valorTotal === 0 ? "sem_venda" : valorRecebido >= valorTotal ? "pago" : valorRecebido > 0 ? "parcial" : "pendente";
 
   const visitaRes = await env.DB.prepare(`
@@ -657,14 +674,25 @@ async function criarVenda(request, env, user) {
   const visitaId = visitaRes.meta.last_row_id;
 
   try {
-    if (itens.length) {
-      await env.DB.batch(itens.map(item => env.DB.prepare(`
+    const gravacoes = [
+      ...itens.map(item => env.DB.prepare(`
         INSERT INTO visita_itens (visita_id, produto_id, produto_nome, quantidade, preco_unitario, subtotal)
         VALUES (?, ?, ?, ?, ?, ?)
-      `).bind(visitaId, item.produto_id, item.produto_nome, item.quantidade, item.preco_unitario, item.subtotal)));
-    }
+      `).bind(visitaId, item.produto_id, item.produto_nome, item.quantidade, item.preco_unitario, item.subtotal)),
+      ...pagamentos.map(pagamento => env.DB.prepare(`
+        INSERT INTO visita_pagamentos (visita_id, forma_pagamento, valor, created_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      `).bind(visitaId, pagamento.forma, pagamento.valor))
+    ];
+    if (gravacoes.length) await env.DB.batch(gravacoes);
   } catch (err) {
-    await env.DB.prepare("DELETE FROM visitas WHERE id = ?").bind(visitaId).run();
+    try {
+      await env.DB.prepare("DELETE FROM visita_pagamentos WHERE visita_id = ?").bind(visitaId).run();
+    } catch {}
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM visita_itens WHERE visita_id = ?").bind(visitaId),
+      env.DB.prepare("DELETE FROM visitas WHERE id = ?").bind(visitaId)
+    ]);
     throw err;
   }
 
@@ -678,7 +706,7 @@ async function criarVenda(request, env, user) {
     cliente: cliente.nome_fantasia || cliente.razao_social || cliente.nome_estabelecimento || "Consumidor",
     vendedor: user.nome || "Vendedor", itens, subtotal, desconto,
     valor_total: valorTotal, valor_recebido: valorRecebido,
-    forma_pagamento: formaPagamento, situacao_pagamento: situacaoPagamento
+    forma_pagamento: formaPagamento, pagamentos, situacao_pagamento: situacaoPagamento
   });
 }
 
@@ -745,13 +773,23 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
   `).bind(...params).all();
 
   const formas = await env.DB.prepare(`
-    SELECT COALESCE(NULLIF(v.forma_pagamento, ''), 'não informado') AS forma_pagamento,
-      COUNT(*) AS vendas, COALESCE(SUM(v.valor_total), 0) AS total,
-      COALESCE(SUM(v.valor_recebido), 0) AS recebido,
-      COALESCE(SUM(v.valor_total - v.valor_recebido), 0) AS pendente
-    FROM visitas v WHERE v.comprou = 'sim' AND v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
-    GROUP BY COALESCE(NULLIF(v.forma_pagamento, ''), 'não informado') ORDER BY total DESC
-  `).bind(...params).all();
+    SELECT forma_pagamento, COUNT(DISTINCT visita_id) AS vendas,
+      COALESCE(SUM(valor), 0) AS total, COALESCE(SUM(recebido), 0) AS recebido,
+      COALESCE(SUM(pendente), 0) AS pendente
+    FROM (
+      SELECT vp.visita_id, vp.forma_pagamento, vp.valor,
+        CASE WHEN vp.forma_pagamento = 'prazo' THEN 0 ELSE vp.valor END AS recebido,
+        CASE WHEN vp.forma_pagamento = 'prazo' THEN vp.valor ELSE 0 END AS pendente
+      FROM visita_pagamentos vp INNER JOIN visitas v ON v.id = vp.visita_id
+      WHERE v.comprou = 'sim' AND v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
+      UNION ALL
+      SELECT v.id, COALESCE(NULLIF(v.forma_pagamento, ''), 'não informado'), v.valor_total,
+        v.valor_recebido, v.valor_total - v.valor_recebido
+      FROM visitas v WHERE v.comprou = 'sim' AND v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
+        AND NOT EXISTS (SELECT 1 FROM visita_pagamentos vp WHERE vp.visita_id = v.id)
+    ) pagamentos
+    GROUP BY forma_pagamento ORDER BY total DESC
+  `).bind(...params, ...params).all();
 
   const visitas = await env.DB.prepare(`
     SELECT v.*, COALESCE(c.nome_fantasia, c.razao_social, c.nome_estabelecimento,
@@ -773,6 +811,13 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
     ORDER BY vi.visita_id DESC, vi.id
   `).bind(...params).all();
 
+  const pagamentosVendas = await env.DB.prepare(`
+    SELECT vp.visita_id, vp.forma_pagamento AS forma, vp.valor
+    FROM visita_pagamentos vp INNER JOIN visitas v ON v.id = vp.visita_id
+    WHERE v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
+    ORDER BY vp.visita_id DESC, vp.id
+  `).bind(...params).all();
+
   const resumoVendedores = user.role === "admin" && visao === "geral"
     ? await env.DB.prepare(`
       SELECT v.vendedor_id,
@@ -791,29 +836,47 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
 
   const fechamentoDinheiro = vendedorId && vendedorSelecionado?.role !== "admin"
     ? await env.DB.prepare(`
-      SELECT COUNT(*) AS vendas_dinheiro,
-        COALESCE(SUM(v.valor_total), 0) AS total_liquido_dinheiro,
-        COALESCE(SUM(v.valor_recebido), 0) AS valor_recebido_dinheiro,
-        COALESCE(SUM(v.valor_total - v.valor_recebido), 0) AS total_pendente_dinheiro,
-        COALESCE(SUM(v.valor_total - v.valor_recebido), 0) AS diferenca_caixa,
-        COALESCE(SUM(v.valor_recebido), 0) AS valor_a_entregar
-      FROM visitas v WHERE v.comprou = 'sim'
-        AND LOWER(TRIM(COALESCE(v.forma_pagamento, ''))) = 'dinheiro'
-        AND v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
-    `).bind(...params).first()
+      SELECT COUNT(DISTINCT visita_id) AS vendas_dinheiro,
+        COALESCE(SUM(valor), 0) AS total_liquido_dinheiro,
+        COALESCE(SUM(recebido), 0) AS valor_recebido_dinheiro,
+        COALESCE(SUM(pendente), 0) AS total_pendente_dinheiro,
+        COALESCE(SUM(pendente), 0) AS diferenca_caixa,
+        COALESCE(SUM(recebido), 0) AS valor_a_entregar
+      FROM (
+        SELECT vp.visita_id, vp.valor, vp.valor AS recebido, 0 AS pendente
+        FROM visita_pagamentos vp INNER JOIN visitas v ON v.id = vp.visita_id
+        WHERE vp.forma_pagamento = 'dinheiro' AND v.comprou = 'sim'
+          AND v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
+        UNION ALL
+        SELECT v.id, v.valor_total, v.valor_recebido, v.valor_total - v.valor_recebido
+        FROM visitas v WHERE v.comprou = 'sim' AND LOWER(TRIM(COALESCE(v.forma_pagamento, ''))) = 'dinheiro'
+          AND v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
+          AND NOT EXISTS (SELECT 1 FROM visita_pagamentos vp WHERE vp.visita_id = v.id)
+      ) dinheiro
+    `).bind(...params, ...params).first()
     : { vendas_dinheiro: 0, total_liquido_dinheiro: 0, valor_recebido_dinheiro: 0, total_pendente_dinheiro: 0, diferenca_caixa: 0, valor_a_entregar: 0 };
 
   const outrasFormas = vendedorId && vendedorSelecionado?.role !== "admin"
     ? await env.DB.prepare(`
-      SELECT COALESCE(NULLIF(v.forma_pagamento, ''), 'não informado') AS forma_pagamento,
-        COUNT(*) AS vendas, COALESCE(SUM(v.valor_total), 0) AS total_liquido,
-        COALESCE(SUM(v.valor_recebido), 0) AS valor_recebido,
-        COALESCE(SUM(v.valor_total - v.valor_recebido), 0) AS valor_pendente
-      FROM visitas v WHERE v.comprou = 'sim'
-        AND LOWER(TRIM(COALESCE(v.forma_pagamento, ''))) <> 'dinheiro'
-        AND v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
-      GROUP BY COALESCE(NULLIF(v.forma_pagamento, ''), 'não informado') ORDER BY total_liquido DESC
-    `).bind(...params).all()
+      SELECT forma_pagamento, COUNT(DISTINCT visita_id) AS vendas,
+        COALESCE(SUM(valor), 0) AS total_liquido,
+        COALESCE(SUM(recebido), 0) AS valor_recebido,
+        COALESCE(SUM(pendente), 0) AS valor_pendente
+      FROM (
+        SELECT vp.visita_id, vp.forma_pagamento, vp.valor,
+          CASE WHEN vp.forma_pagamento = 'prazo' THEN 0 ELSE vp.valor END AS recebido,
+          CASE WHEN vp.forma_pagamento = 'prazo' THEN vp.valor ELSE 0 END AS pendente
+        FROM visita_pagamentos vp INNER JOIN visitas v ON v.id = vp.visita_id
+        WHERE vp.forma_pagamento <> 'dinheiro' AND v.comprou = 'sim'
+          AND v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
+        UNION ALL
+        SELECT v.id, COALESCE(NULLIF(v.forma_pagamento, ''), 'não informado'), v.valor_total,
+          v.valor_recebido, v.valor_total - v.valor_recebido
+        FROM visitas v WHERE v.comprou = 'sim' AND LOWER(TRIM(COALESCE(v.forma_pagamento, ''))) <> 'dinheiro'
+          AND v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
+          AND NOT EXISTS (SELECT 1 FROM visita_pagamentos vp WHERE vp.visita_id = v.id)
+      ) outras GROUP BY forma_pagamento ORDER BY total_liquido DESC
+    `).bind(...params, ...params).all()
     : { results: [] };
 
   const fardos = vendedorId && vendedorSelecionado?.role !== "admin"
@@ -832,9 +895,21 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
     if (!itensPorVisita.has(chave)) itensPorVisita.set(chave, []);
     itensPorVisita.get(chave).push(item);
   }
+  const pagamentosPorVisita = new Map();
+  for (const pagamento of pagamentosVendas.results || []) {
+    const chave = Number(pagamento.visita_id);
+    if (!pagamentosPorVisita.has(chave)) pagamentosPorVisita.set(chave, []);
+    pagamentosPorVisita.get(chave).push({ forma: pagamento.forma, valor: Number(pagamento.valor || 0) });
+  }
   const vendasDetalhadas = (visitas.results || []).map(visita => ({
     ...visita,
-    itens: itensPorVisita.get(Number(visita.id)) || []
+    itens: itensPorVisita.get(Number(visita.id)) || [],
+    pagamentos: pagamentosPorVisita.get(Number(visita.id)) || [{
+      forma: visita.forma_pagamento || "não informado",
+      valor: visita.forma_pagamento === "prazo"
+        ? Math.max(0, Number(visita.valor_total || 0) - Number(visita.valor_recebido || 0))
+        : Number(visita.valor_recebido || 0)
+    }]
   }));
 
   const resumoVendedor = visao === "vendedor" ? {

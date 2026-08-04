@@ -236,10 +236,13 @@
       color:#7C2D12;
       text-align:center
     }
+    .pagamento-linha{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;margin-bottom:9px}
+    .pagamento-linha .remove-item{margin-bottom:2px}
+    .pagamento-resumo{line-height:1.7;text-align:left}
     @media(max-width:620px){
       body{padding:10px}
       .container{padding:16px;border-radius:22px}
-      .grid2,.actions{grid-template-columns:1fr}
+      .grid2,.actions,.pagamento-linha{grid-template-columns:1fr}
       .top{flex-direction:column;text-align:center}
       .logo{width:120px;height:120px}
       .btn{padding:15px}
@@ -452,21 +455,14 @@
       <input id="observacoes" placeholder="Ex.: pediu retorno, sem espaço, comprou pouco...">
     </div>
 
-    <div class="grid2">
-      <div class="group">
-        <label>Forma de pagamento</label>
-        <select id="forma_pagamento">
-          <option value="dinheiro">Dinheiro</option>
-          <option value="pix">Pix</option>
-          <option value="cartao">Cartão</option>
-          <option value="prazo">Prazo</option>
-        </select>
-      </div>
-      <div class="group">
-        <label>Valor recebido</label>
-        <input id="valor_recebido" type="number" step="0.01" min="0" value="0">
-      </div>
+    <h3>Pagamentos</h3>
+    <div id="pagamentos"></div>
+    <button type="button" class="btn soft" id="btnAddPagamento">+ Adicionar forma de pagamento</button>
+    <div class="group">
+      <label>Situação quando houver diferença</label>
+      <select id="situacao_pagamento"><option value="pago">Pago</option><option value="parcial">Parcial</option><option value="pendente">Pendente</option></select>
     </div>
+    <div id="resumoPagamentos" class="total-box pagamento-resumo"></div>
 
     <div class="group">
       <label>Desconto</label>
@@ -1170,6 +1166,21 @@ function coletarItens(){
     .filter(item => item.quantidade > 0 && item.produto_nome);
 }
 
+function adicionarPagamento(forma="dinheiro", valor=0){
+  const linha=document.createElement("div");
+  linha.className="pagamento-linha";
+  linha.innerHTML=`<label>Forma<select class="pagamento-forma"><option value="dinheiro">Dinheiro</option><option value="pix">Pix</option><option value="cartao">Cartão</option><option value="prazo">Prazo</option></select></label><label>Valor<input class="pagamento-valor" type="number" min="0" step="0.01" value="${Number(valor)||0}"></label><button class="remove-item remover-pagamento" type="button">Remover</button>`;
+  linha.querySelector(".pagamento-forma").value=forma;
+  linha.querySelectorAll("select,input").forEach(campo=>campo.addEventListener("input",atualizarTotal));
+  linha.querySelector(".remover-pagamento").onclick=()=>{linha.remove();atualizarTotal()};
+  document.getElementById("pagamentos").appendChild(linha);
+  atualizarTotal();
+}
+
+function coletarPagamentos(){return [...document.querySelectorAll(".pagamento-linha")].map(linha=>({forma:linha.querySelector(".pagamento-forma").value,valor:Number(linha.querySelector(".pagamento-valor").value)}))}
+
+function totalLiquidoAtual(){const subtotal=coletarItens().reduce((soma,item)=>soma+(item.quantidade*item.preco_unitario),0);return Math.max(0,subtotal-Number(document.getElementById("desconto").value||0))}
+
 function atualizarTotal(){
   const subtotal = coletarItens().reduce((soma, item) =>
     soma + (item.quantidade * item.preco_unitario), 0
@@ -1179,6 +1190,8 @@ function atualizarTotal(){
 
   document.getElementById("totalEstimado").textContent =
     "Total estimado: " + dinheiro(total);
+  const totalPagamentos=coletarPagamentos().reduce((soma,p)=>soma+(Number.isFinite(p.valor)?p.valor:0),0);
+  document.getElementById("resumoPagamentos").innerHTML=`Total da venda: <strong>${dinheiro(total)}</strong><br>Total informado nos pagamentos: <strong>${dinheiro(totalPagamentos)}</strong><br>Diferença: <strong>${dinheiro(total-totalPagamentos)}</strong>`;
 }
 
 function textoTicket(data){
@@ -1194,7 +1207,8 @@ function textoTicket(data){
     `Subtotal: ${dinheiro(data.subtotal)}`,
     `Desconto: ${dinheiro(data.desconto)}`,
     `Total: ${dinheiro(data.valor_total)}`,
-    `Forma de pagamento: ${data.forma_pagamento}`,
+    "Pagamentos:",
+    ...(data.pagamentos||[]).map(p=>`- ${p.forma}: ${dinheiro(p.valor)}`),
     `Situação: ${data.situacao_pagamento}`
   ];
   return linhas.join("\n");
@@ -1203,6 +1217,7 @@ function textoTicket(data){
 function mostrarTicket(data){
   const ticket = document.getElementById("ticket");
   const itens = data.itens.map(item => `<div>${item.produto_nome}: ${item.quantidade} × ${dinheiro(item.preco_unitario)} = <strong>${dinheiro(item.subtotal)}</strong></div>`).join("");
+  const pagamentos=(data.pagamentos||[]).map(p=>`<div>${p.forma}: <strong>${dinheiro(p.valor)}</strong></div>`).join("");
   ticket.dataset.texto = textoTicket(data);
   ticket.innerHTML = `
     <h3>Vovó Maria Pães e Biscoitos</h3>
@@ -1212,7 +1227,7 @@ function mostrarTicket(data){
     <hr>
     <p>Subtotal: ${dinheiro(data.subtotal)}<br>Desconto: ${dinheiro(data.desconto)}<br>
     <strong>Total: ${dinheiro(data.valor_total)}</strong><br>
-    Pagamento: ${data.forma_pagamento} · ${data.situacao_pagamento}</p>
+    Pagamentos:<br>${pagamentos||"Não informado"}<br>Situação: ${data.situacao_pagamento}</p>
     <div class="actions">
       <button type="button" class="btn soft" id="btnCompartilharTicket">Compartilhar</button>
       <button type="button" class="btn soft" id="btnCopiarTicket">Copiar texto</button>
@@ -1261,6 +1276,8 @@ async function carregar(){
 
     document.getElementById("itens").innerHTML = "";
     addItem();
+    document.getElementById("pagamentos").innerHTML = "";
+    adicionarPagamento();
 
     const params = new URLSearchParams(location.search);
     const clienteIdUrl = params.get("cliente_id");
@@ -1324,6 +1341,7 @@ document.addEventListener("click", event => {
 });
 
 document.getElementById("btnAddItem").addEventListener("click", addItem);
+document.getElementById("btnAddPagamento").addEventListener("click", ()=>adicionarPagamento());
 document.getElementById("desconto").addEventListener("input", atualizarTotal);
 
 document.getElementById("comprou").addEventListener("change", function(){
@@ -1339,6 +1357,7 @@ document.getElementById("visitaForm").addEventListener("submit", async event => 
   const clienteSelecionado = encontrarClienteSelecionado(clienteId);
   const comprou = document.getElementById("comprou").value;
   const itens = comprou === "sim" ? coletarItens() : [];
+  const pagamentos = comprou === "sim" ? coletarPagamentos() : [];
 
   if(!clienteId){
     setStatus("Selecione um cliente.", "err");
@@ -1349,6 +1368,15 @@ document.getElementById("visitaForm").addEventListener("submit", async event => 
     setStatus("Adicione pelo menos um produto com quantidade maior que zero.", "err");
     return;
   }
+  const formas=pagamentos.map(p=>p.forma);
+  const totalPagamentos=pagamentos.reduce((soma,p)=>soma+p.valor,0);
+  const totalVenda=totalLiquidoAtual();
+  const situacao=document.getElementById("situacao_pagamento").value;
+  if(comprou==="sim"&&!pagamentos.length){setStatus("Informe ao menos uma forma de pagamento.","err");return}
+  if(pagamentos.some(p=>!Number.isFinite(p.valor)||p.valor<0)){setStatus("Informe valores de pagamento válidos e não negativos.","err");return}
+  if(new Set(formas).size!==formas.length){setStatus("Não repita a mesma forma de pagamento.","err");return}
+  if(totalPagamentos>totalVenda+0.005){setStatus("A soma dos pagamentos não pode superar o total da venda.","err");return}
+  if(totalPagamentos<totalVenda-0.005&&!formas.includes("prazo")&&!['parcial','pendente'].includes(situacao)){setStatus("A diferença exige pagamento em prazo ou situação parcial/pendente.","err");return}
 
   const body = {
     cliente_id: clienteSelecionado?.tipo_origem === "avulso" ? 0 : Number(clienteSelecionado?.id || clienteId.replace(/^cliente:/, "")),
@@ -1356,8 +1384,8 @@ document.getElementById("visitaForm").addEventListener("submit", async event => 
     data_visita: document.getElementById("data_visita").value,
     comprou,
     observacoes: document.getElementById("observacoes").value.trim(),
-    forma_pagamento: document.getElementById("forma_pagamento").value,
-    valor_recebido: Number(document.getElementById("valor_recebido").value || 0),
+    pagamentos,
+    situacao_pagamento: situacao,
     desconto: Number(document.getElementById("desconto").value || 0),
     itens
   };
@@ -1389,6 +1417,8 @@ document.getElementById("visitaForm").addEventListener("submit", async event => 
     document.getElementById("cliente_id").value = clienteSelecionado;
     document.getElementById("itens").innerHTML = "";
     addItem();
+    document.getElementById("pagamentos").innerHTML = "";
+    adicionarPagamento();
     mostrarResumoCliente();
     atualizarTotal();
 
