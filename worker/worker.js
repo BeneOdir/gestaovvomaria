@@ -708,8 +708,14 @@ async function criarVenda(request, env, user) {
       .bind(dataVisita, clienteId).run();
   }
 
+  let createdAt = null;
+  try {
+    const vendaSalva = await env.DB.prepare("SELECT created_at FROM visitas WHERE id = ?").bind(visitaId).first();
+    createdAt = vendaSalva?.created_at || null;
+  } catch {}
+
   return json({
-    success: true, visita_id: visitaId, data_visita: dataVisita,
+    success: true, visita_id: visitaId, data_visita: dataVisita, created_at: createdAt,
     cliente: cliente.nome_fantasia || cliente.razao_social || cliente.nome_estabelecimento || "Consumidor",
     vendedor: user.nome || "Vendedor", itens, subtotal, desconto,
     valor_total: valorTotal, valor_recebido: valorRecebido,

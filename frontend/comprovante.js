@@ -35,24 +35,37 @@
     const itens=Array.isArray(venda.itens)?venda.itens:[],pagamentos=Array.isArray(venda.pagamentos)?venda.pagamentos:[];const subtotal=Number(venda.subtotal??itens.reduce((s,i)=>s+Number(i.subtotal||0),0)),desconto=Number(venda.desconto||0),total=Number(venda.valor_total??subtotal-desconto),recebido=Number(venda.valor_recebido??pagamentos.filter(p=>String(p.forma).toLowerCase()!=="prazo").reduce((s,p)=>s+Number(p.valor||0),0)),quando=dataHora(venda.created_at,venda.data_visita);
     return [EMPRESA.nomeFantasia,"COMPROVANTE DE COMPRA",`Venda nº ${venda.visita_id??venda.id}`,`Data: ${quando.data} | Hora: ${quando.hora}`,`Cliente: ${venda.cliente||venda.cliente_nome||"Consumidor"}`,`Vendedor: ${venda.vendedor||venda.vendedor_nome||"Vendedor"}`,venda.observacoes?`Observações: ${venda.observacoes}`:"","",...itens.map(i=>`${i.produto_nome} | ${i.quantidade} × ${dinheiro(i.preco_unitario)} = ${dinheiro(i.subtotal)}`),"",`Subtotal: ${dinheiro(subtotal)}`,`Desconto: ${dinheiro(desconto)}`,`TOTAL DA COMPRA: ${dinheiro(total)}`,`Recebido: ${dinheiro(recebido)}`,`Pendente: ${dinheiro(Math.max(0,total-recebido))}`,"Pagamentos:",...(pagamentos.length?pagamentos:[{forma:venda.forma_pagamento||"Não informado",valor:recebido}]).map(p=>`${rotuloForma(p.forma)}: ${dinheiro(p.valor)}`),`Situação: ${String(venda.situacao_pagamento||"pendente").toUpperCase()}`,"","Obrigado pela preferência!",`WhatsApp: ${EMPRESA.whatsapp}`,`Instagram: ${EMPRESA.instagram}`,"Este comprovante não substitui documento fiscal."].filter(Boolean).join("\n");
   }
-  function textoWinAnsi(texto){return String(texto).replace(/[–—]/g,"-").replace(/×/g,"x").replace(/[“”]/g,'"').replace(/[‘’]/g,"'").replace(/[^\x09\x0A\x0D\x20-\xFF]/g,"?")}
-  function escaparPdf(texto){return textoWinAnsi(texto).replace(/\\/g,"\\\\").replace(/\(/g,"\\(").replace(/\)/g,"\\)").replace(/[\x00-\x1F]/g,"")}
-  function quebrarLinhaPdf(texto,limite=66){
-    if(!texto)return [""];const palavras=textoWinAnsi(texto).split(/\s+/),linhas=[];let atual="";
-    for(const palavra of palavras){if(palavra.length>limite){if(atual){linhas.push(atual);atual=""}for(let i=0;i<palavra.length;i+=limite)linhas.push(palavra.slice(i,i+limite));continue}const candidata=atual?`${atual} ${palavra}`:palavra;if(candidata.length>limite){linhas.push(atual);atual=palavra}else atual=candidata}if(atual)linhas.push(atual);return linhas;
+  const cachePdfVisual=new WeakMap();
+  const obterComprovante=origem=>origem?.classList?.contains("comprovante")?origem:origem?.querySelector?.(".comprovante");
+  async function gerarArquivoPdfVisual(comprovante,nomeArquivo){
+    if(typeof global.html2canvas!=="function"||!global.jspdf?.jsPDF)throw new Error("Os recursos de geração do PDF visual não foram carregados.");
+    await aguardarRecursosImpressao(global);
+    const canvas=await global.html2canvas(comprovante,{backgroundColor:"#ffffff",scale:Math.max(2,Math.min(3,global.devicePixelRatio||2)),useCORS:true,logging:false,imageTimeout:8000,removeContainer:true});
+    const {jsPDF}=global.jspdf,pdf=new jsPDF({orientation:"portrait",unit:"mm",format:"a5",compress:true});
+    const margem=7,larguraPagina=148,alturaPagina=210,larguraUtil=larguraPagina-margem*2,alturaUtil=alturaPagina-margem*2;
+    const alturaFatia=Math.max(1,Math.floor(canvas.width*alturaUtil/larguraUtil));
+    let topo=0,pagina=0;
+    while(topo<canvas.height){
+      const altura=Math.min(alturaFatia,canvas.height-topo),fatia=document.createElement("canvas");
+      fatia.width=canvas.width;fatia.height=altura;
+      const contexto=fatia.getContext("2d");contexto.fillStyle="#fff";contexto.fillRect(0,0,fatia.width,fatia.height);contexto.drawImage(canvas,0,topo,canvas.width,altura,0,0,canvas.width,altura);
+      if(pagina++)pdf.addPage("a5","portrait");
+      pdf.addImage(fatia.toDataURL("image/jpeg",0.96),"JPEG",margem,margem,larguraUtil,altura*larguraUtil/canvas.width,undefined,"FAST");
+      topo+=altura;
+    }
+    return new File([pdf.output("arraybuffer")],nomeArquivo,{type:"application/pdf"});
   }
-  function bytesLatin1(texto){const bytes=new Uint8Array(texto.length);for(let i=0;i<texto.length;i++)bytes[i]=texto.charCodeAt(i)&255;return bytes}
-  function criarArquivoPdfTexto(texto,nomeArquivo){
-    const linhas=String(texto).split("\n").flatMap(linha=>quebrarLinhaPdf(linha)),porPagina=43,paginas=[];for(let i=0;i<linhas.length;i+=porPagina)paginas.push(linhas.slice(i,i+porPagina));if(!paginas.length)paginas.push([""]);
-    const objetos=[];objetos[1]="<< /Type /Catalog /Pages 2 0 R >>";objetos[3]="<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
-    const filhos=[];paginas.forEach((linhasPagina,indice)=>{const paginaId=4+indice*2,conteudoId=paginaId+1;filhos.push(`${paginaId} 0 R`);const comandos=`BT\n/F1 9 Tf\n38 555 Td\n12 TL\n${linhasPagina.map(l=>`(${escaparPdf(l)}) Tj T*`).join("\n")}\nET`;objetos[paginaId]=`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 419.53 595.28] /Resources << /Font << /F1 3 0 R >> >> /Contents ${conteudoId} 0 R >>`;objetos[conteudoId]=`<< /Length ${bytesLatin1(comandos).length} >>\nstream\n${comandos}\nendstream`});objetos[2]=`<< /Type /Pages /Kids [${filhos.join(" ")}] /Count ${paginas.length} >>`;
-    let pdf="%PDF-1.4\n%âãÏÓ\n",offset=bytesLatin1(pdf).length;const offsets=[0];for(let id=1;id<objetos.length;id++){offsets[id]=offset;const bloco=`${id} 0 obj\n${objetos[id]}\nendobj\n`;pdf+=bloco;offset+=bytesLatin1(bloco).length}const inicioXref=offset;pdf+=`xref\n0 ${objetos.length}\n0000000000 65535 f \n`;for(let id=1;id<objetos.length;id++)pdf+=`${String(offsets[id]).padStart(10,"0")} 00000 n \n`;pdf+=`trailer\n<< /Size ${objetos.length} /Root 1 0 R >>\nstartxref\n${inicioXref}\n%%EOF`;
-    return new File([bytesLatin1(pdf)],nomeArquivo,{type:"application/pdf"});
+  function gerarPdfComprovante(venda,dinheiro,origem){
+    const comprovante=obterComprovante(origem),numero=venda?.visita_id??venda?.id??"sem-numero",nome=`comprovante-venda-${numero}.pdf`;
+    if(!comprovante)return Promise.reject(new Error("Comprovante visual não encontrado."));
+    const existente=cachePdfVisual.get(comprovante);if(existente?.numero===String(numero))return existente.promessa;
+    const promessa=gerarArquivoPdfVisual(comprovante,nome).catch(erro=>{cachePdfVisual.delete(comprovante);throw erro});
+    cachePdfVisual.set(comprovante,{numero:String(numero),promessa});return promessa;
   }
-  function gerarPdfComprovante(venda,dinheiro){const numero=venda?.visita_id??venda?.id??"sem-numero";return criarArquivoPdfTexto(textoComprovante(venda,dinheiro),`comprovante-venda-${numero}.pdf`)}
+  function prepararPdfComprovante(venda,dinheiro,origem){return gerarPdfComprovante(venda,dinheiro,origem).catch(()=>null)}
   function baixarArquivo(arquivo){const url=URL.createObjectURL(arquivo),link=document.createElement("a");link.href=url;link.download=arquivo.name;link.hidden=true;document.body.appendChild(link);link.click();link.remove();global.setTimeout(()=>URL.revokeObjectURL(url),30000)}
-  async function compartilharComprovantePdf(venda,dinheiro){
-    const arquivo=gerarPdfComprovante(venda,dinheiro),dados={files:[arquivo],title:"Comprovante de compra",text:`Comprovante da venda nº ${venda?.visita_id??venda?.id??""}`};
+  async function compartilharComprovantePdf(venda,dinheiro,origem){
+    const arquivo=await gerarPdfComprovante(venda,dinheiro,origem),dados={files:[arquivo],title:"Comprovante de compra",text:`Comprovante da venda nº ${venda?.visita_id??venda?.id??""}`};
     if(global.navigator?.share&&global.navigator?.canShare?.({files:[arquivo]})){try{await global.navigator.share(dados);return {compartilhado:true,arquivo}}catch(erro){if(erro?.name==="AbortError")return {cancelado:true,arquivo}}}
     baixarArquivo(arquivo);return {baixado:true,arquivo};
   }
@@ -101,5 +114,5 @@
     if(!janela){imprimirComClone(comprovante);return}
     prepararJanelaImpressao(janela,comprovante).catch(()=>{try{janela.close()}catch{}imprimirComClone(comprovante)});
   }
-  global.EMPRESA_COMPROVANTE=EMPRESA;global.criarComprovante=criarComprovante;global.textoComprovante=textoComprovante;global.gerarPdfComprovante=gerarPdfComprovante;global.compartilharComprovantePdf=compartilharComprovantePdf;global.imprimirComprovante=imprimirComprovante;
+  global.EMPRESA_COMPROVANTE=EMPRESA;global.criarComprovante=criarComprovante;global.textoComprovante=textoComprovante;global.gerarPdfComprovante=gerarPdfComprovante;global.prepararPdfComprovante=prepararPdfComprovante;global.compartilharComprovantePdf=compartilharComprovantePdf;global.imprimirComprovante=imprimirComprovante;
 })(globalThis);

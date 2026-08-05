@@ -1,3 +1,4 @@
+.comprovante-modal{position:fixed;inset:0;z-index:1200;background:rgba(28,25,23,.72);display:flex;align-items:flex-start;justify-content:center;padding:18px;overflow:auto}.comprovante-modal[hidden]{display:none}.comprovante-modal-conteudo{width:min(100%,680px);margin:auto;background:#fff;border-radius:18px;padding:18px;box-shadow:0 20px 55px rgba(0,0,0,.3)}body.comprovante-modal-aberto{overflow:hidden}
 .comprovante{page:comprovante;font-family:Inter,Roboto,Arial,sans-serif;color:#292524;background:#fff;border:1px solid #d6d3d1;border-radius:12px;max-width:148mm;margin:0 auto;padding:9mm;line-height:1.35}
 .comprovante-cabecalho{display:grid;grid-template-columns:30% 70%;min-height:53mm;border-bottom:2px solid #7c2d12;padding:4mm 0 6mm;align-items:center}
 .comprovante-logo{height:49mm;display:flex;align-items:center;justify-content:center;padding-right:5mm}
