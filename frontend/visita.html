@@ -6,6 +6,7 @@
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#e9a900">
   <link rel="apple-touch-icon" href="images/icon-192.png">
+  <link rel="stylesheet" href="comprovante.css">
   <title>Gestão Vovó Maria · Visita/Venda</title>
   <style>
     *{margin:0;padding:0;box-sizing:border-box}
@@ -249,10 +250,7 @@
       input,select,textarea{font-size:16px}
     }
     @media print{
-      body *{visibility:hidden}
-      #ticket,#ticket *{visibility:visible}
-      #ticket{position:absolute;inset:0;display:block!important;border:0;box-shadow:none}
-      #ticket .actions{display:none}
+      body.imprimindo-comprovante #areaImpressaoComprovante{display:block!important}
     }
   </style>
 </head>
@@ -488,6 +486,8 @@
 </div>
 
 <script src="moeda.js"></script>
+<script src="data-cuiaba.js"></script>
+<script src="comprovante.js"></script>
 <script>
 const API_URL = "https://gestaovomaria-api.odir-bene12.workers.dev";
 
@@ -504,7 +504,7 @@ if(vendedorRole !== "admin") document.getElementById("navProdutos").hidden = tru
 
 document.getElementById("userInfo").textContent = "Logado como: " + vendedorNome;
 
-const hoje = new Date().toISOString().slice(0,10);
+const hoje = obterDataLocalCuiaba();
 document.getElementById("data_visita").value = hoje;
 
 let clientes = [];
@@ -1194,52 +1194,23 @@ function atualizarTotal(){
   document.getElementById("resumoPagamentos").innerHTML=`Total da venda: <strong>${dinheiro(total)}</strong><br>Total informado nos pagamentos: <strong>${dinheiro(totalPagamentos)}</strong><br>Diferença: <strong>${dinheiro(total-totalPagamentos)}</strong>`;
 }
 
-function textoTicket(data){
-  const linhas = [
-    "Vovó Maria Pães e Biscoitos",
-    `Venda nº ${data.visita_id}`,
-    `Data: ${data.data_visita}`,
-    `Cliente: ${data.cliente}`,
-    `Vendedor: ${data.vendedor}`,
-    "",
-    ...data.itens.map(item => `${item.produto_nome} | ${item.quantidade} x ${dinheiro(item.preco_unitario)} = ${dinheiro(item.subtotal)}`),
-    "",
-    `Subtotal: ${dinheiro(data.subtotal)}`,
-    `Desconto: ${dinheiro(data.desconto)}`,
-    `Total: ${dinheiro(data.valor_total)}`,
-    "Pagamentos:",
-    ...(data.pagamentos||[]).map(p=>`- ${p.forma}: ${dinheiro(p.valor)}`),
-    `Situação: ${data.situacao_pagamento}`
-  ];
-  return linhas.join("\n");
-}
-
 function mostrarTicket(data){
   const ticket = document.getElementById("ticket");
-  const itens = data.itens.map(item => `<div>${item.produto_nome}: ${item.quantidade} × ${dinheiro(item.preco_unitario)} = <strong>${dinheiro(item.subtotal)}</strong></div>`).join("");
-  const pagamentos=(data.pagamentos||[]).map(p=>`<div>${p.forma}: <strong>${dinheiro(p.valor)}</strong></div>`).join("");
-  ticket.dataset.texto = textoTicket(data);
-  ticket.innerHTML = `
-    <h3>Vovó Maria Pães e Biscoitos</h3>
-    <p>Venda nº ${data.visita_id} · ${data.data_visita}</p>
-    <p>Cliente: <strong>${data.cliente}</strong><br>Vendedor: ${data.vendedor}</p>
-    ${itens}
-    <hr>
-    <p>Subtotal: ${dinheiro(data.subtotal)}<br>Desconto: ${dinheiro(data.desconto)}<br>
-    <strong>Total: ${dinheiro(data.valor_total)}</strong><br>
-    Pagamentos:<br>${pagamentos||"Não informado"}<br>Situação: ${data.situacao_pagamento}</p>
-    <div class="actions">
-      <button type="button" class="btn soft" id="btnCompartilharTicket">Compartilhar</button>
+  data.observacoes=document.getElementById("observacoes").value.trim();
+  ticket.dataset.texto = textoComprovante(data,dinheiro);
+  ticket.innerHTML = criarComprovante(data,dinheiro)+`
+    <div class="actions comprovante-acoes">
+      <button type="button" class="btn soft" id="btnCompartilharTicket">Compartilhar comprovante</button>
       <button type="button" class="btn soft" id="btnCopiarTicket">Copiar texto</button>
-      <button type="button" class="btn dark" id="btnImprimirTicket">Imprimir</button>
+      <button type="button" class="btn dark" id="btnImprimirTicket">Imprimir / Salvar em PDF</button>
     </div>`;
   ticket.style.display = "block";
   document.getElementById("btnCompartilharTicket").onclick = async () => {
-    if(navigator.share) await navigator.share({ title:"Ticket de venda", text:ticket.dataset.texto });
+    if(navigator.share) await navigator.share({ title:"Comprovante de compra", text:ticket.dataset.texto });
     else await copiarTicket();
   };
   document.getElementById("btnCopiarTicket").onclick = copiarTicket;
-  document.getElementById("btnImprimirTicket").onclick = () => window.print();
+  document.getElementById("btnImprimirTicket").onclick = () => imprimirComprovante(ticket);
 }
 
 async function copiarTicket(){
@@ -1254,7 +1225,7 @@ async function copiarTicket(){
     document.execCommand("copy");
     area.remove();
   }
-  setStatus("Ticket copiado.", "ok");
+  setStatus("Comprovante copiado.", "ok");
 }
 
 async function carregar(){
@@ -1418,7 +1389,7 @@ document.getElementById("visitaForm").addEventListener("submit", async event => 
     const clienteSelecionado = document.getElementById("cliente_id").value;
 
     document.getElementById("visitaForm").reset();
-    document.getElementById("data_visita").value = hoje;
+    document.getElementById("data_visita").value = obterDataLocalCuiaba();
     document.getElementById("cliente_id").value = clienteSelecionado;
     document.getElementById("itens").innerHTML = "";
     addItem();

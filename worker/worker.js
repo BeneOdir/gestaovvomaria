@@ -25,6 +25,13 @@ function normalizeText(v = "") {
   return String(v || "").trim();
 }
 
+function obterDataLocalCuiaba(instante = new Date()) {
+  const partes = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Cuiaba", year: "numeric", month: "2-digit", day: "2-digit"
+  }).formatToParts(instante).filter(parte => parte.type !== "literal").map(parte => [parte.type, parte.value]));
+  return `${partes.year}-${partes.month}-${partes.day}`;
+}
+
 function filtroRegistroTeste(alias = "v", somenteTeste = false) {
   const texto = `LOWER(' ' || COALESCE(${alias}.observacoes, '') || ' ')`;
   const contemPalavraTeste = `${texto} GLOB '*[^0-9a-z_]teste[^0-9a-z_]*'`;
@@ -477,7 +484,7 @@ async function criarVisita(request, env, user) {
   try {
     const d = await request.json();
     const clienteId = Number(d.cliente_id || 0);
-    const dataVisita = normalizeText(d.data_visita || new Date().toISOString().slice(0,10));
+    const dataVisita = normalizeText(d.data_visita || obterDataLocalCuiaba());
     const comprou = d.comprou === "sim" || d.comprou === true ? "sim" : "nao";
     const observacoes = normalizeText(d.observacoes);
     const itens = Array.isArray(d.itens) ? d.itens : [];
@@ -529,7 +536,7 @@ async function criarVisita(request, env, user) {
 
 async function listarVisitas(request, env, user) {
   const url = new URL(request.url);
-  const data = url.searchParams.get("data") || new Date().toISOString().slice(0,10);
+  const data = url.searchParams.get("data") || obterDataLocalCuiaba();
   let result;
   if (user.role === "admin") {
     result = await env.DB.prepare(`
@@ -555,7 +562,7 @@ async function listarVisitas(request, env, user) {
 
 async function relatorioDia(request, env, user) {
   const url = new URL(request.url);
-  const data = url.searchParams.get("data") || new Date().toISOString().slice(0,10);
+  const data = url.searchParams.get("data") || obterDataLocalCuiaba();
   const filtroVendedor = user.role === "admin" ? "" : " AND vendedor_id = ?";
   const params = user.role === "admin" ? [data] : [data, user.vendedorId];
 
@@ -601,7 +608,7 @@ async function criarVenda(request, env, user) {
   const d = await request.json();
   const clienteId = Number(d.cliente_id || 0);
   const clienteAvulsoId = Number(d.cliente_avulso_id || 0);
-  const dataVisita = normalizeText(d.data_visita || new Date().toISOString().slice(0, 10));
+  const dataVisita = normalizeText(d.data_visita || obterDataLocalCuiaba());
   const comprou = d.comprou === "sim" || d.comprou === true ? "sim" : "nao";
   const observacoes = normalizeText(d.observacoes);
   const desconto = Number(d.desconto || 0);
@@ -715,7 +722,7 @@ const COMISSAO_POR_FARDO = 1.75;
 
 async function relatorioPeriodo(request, env, user, somenteTeste = false) {
   const url = new URL(request.url);
-  const hoje = new Date().toISOString().slice(0, 10);
+  const hoje = obterDataLocalCuiaba();
   const dataInicial = url.searchParams.get("data_inicial") || url.searchParams.get("data") || hoje;
   const dataFinal = url.searchParams.get("data_final") || url.searchParams.get("data") || dataInicial;
   const visaoSolicitada = normalizeText(url.searchParams.get("visao") || (user.role === "admin" ? "geral" : "vendedor")).toLowerCase();

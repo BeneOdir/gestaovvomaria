@@ -360,6 +360,7 @@
 <body>
     <div class="container" id="app"></div>
 
+    <script src="data-cuiaba.js"></script>
     <script>
         // ============================================
         // MÓDULOS DE TREINAMENTO (31 dias completos)
@@ -414,7 +415,7 @@
         // FUNÇÕES AUXILIARES
         // ============================================
         function getTodayKey() {
-            return new Date().toISOString().split('T')[0];
+            return obterDataLocalCuiaba();
         }
 
         function getAulasFeitasHoje() {
@@ -446,9 +447,7 @@
             const aulasLiberadas = [];
             
             // Verifica pendência do dia anterior
-            const ontem = new Date();
-            ontem.setDate(ontem.getDate() - 1);
-            const ontemKey = ontem.toISOString().split('T')[0];
+            const ontemKey = somarDiasCuiaba(obterDataLocalCuiaba(), -1);
             const aulasFeitasOntem = userData.dailyCompletions[ontemKey] || 0;
             
             if (aulasFeitasOntem < 2 && completed.length > 0) {
@@ -476,9 +475,7 @@
             if (liberadas.includes(dia)) return 'available';
             
             // Verifica se é pendente do dia anterior
-            const ontem = new Date();
-            ontem.setDate(ontem.getDate() - 1);
-            const ontemKey = ontem.toISOString().split('T')[0];
+            const ontemKey = somarDiasCuiaba(obterDataLocalCuiaba(), -1);
             const aulasFeitasOntem = userData.dailyCompletions[ontemKey] || 0;
             
             if (aulasFeitasOntem < 2 && dia === (Math.max(...userData.completedDays, 0) + 1)) {
@@ -490,15 +487,15 @@
 
         function getStreak() {
             let streak = 0;
-            let currentDate = new Date();
+            let currentDate = obterDataLocalCuiaba();
             
             for (let i = 0; i < 31; i++) {
-                const dateKey = currentDate.toISOString().split('T')[0];
+                const dateKey = currentDate;
                 const completions = userData.dailyCompletions[dateKey] || 0;
                 
                 if (completions > 0) {
                     streak++;
-                    currentDate.setDate(currentDate.getDate() - 1);
+                    currentDate = somarDiasCuiaba(currentDate, -1);
                 } else {
                     break;
                 }

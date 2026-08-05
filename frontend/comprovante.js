@@ -1,0 +1,47 @@
+(function(global){
+  const EMPRESA={
+    razaoSocial:"Odir B. da Silva - ME",
+    nomeFantasia:"Vovó Maria Pães e Biscoitos",
+    cnpj:"24.256.043/0001-09",
+    endereco:"Rua Marconi, 109 - Campo Velho",
+    cidade:"Cuiabá - MT",
+    whatsapp:"(65) 99994-4918",
+    instagram:"@vovomariapaesebiscoitos"
+  };
+  const escapar=valor=>String(valor??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const rotuloForma=forma=>({dinheiro:"Dinheiro",pix:"Pix",cartao:"Cartão",prazo:"Prazo",boleto:"Boleto"}[String(forma||"").toLowerCase()]||String(forma||"Não informado"));
+  function dataHora(valor,dataAlternativa){
+    const texto=String(valor||"").trim();let data=null;
+    if(texto){const horarioD1=/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(texto);const normalizado=horarioD1?`${texto.replace(" ","T")}Z`:texto;const candidata=new Date(normalizado);if(!Number.isNaN(candidata.getTime()))data=candidata}else data=new Date();
+    const dataVenda=String(dataAlternativa||"");
+    const local=data?obterDataHoraLocalCuiaba(data):null;return {data:dataVenda?dataVenda.split("-").reverse().join("/"):(local?local.data.split("-").reverse().join("/"):"Não informada"),hora:local?local.hora:"Não informada"};
+  }
+  function criarComprovante(venda,dinheiro){
+    const itens=Array.isArray(venda.itens)?venda.itens:[],pagamentos=Array.isArray(venda.pagamentos)?venda.pagamentos:[];
+    const subtotal=Number(venda.subtotal??itens.reduce((s,i)=>s+Number(i.subtotal??Number(i.quantidade||0)*Number(i.preco_unitario||0)),0));
+    const desconto=Number(venda.desconto||0),total=Number(venda.valor_total??Math.max(0,subtotal-desconto)),recebido=Number(venda.valor_recebido??pagamentos.filter(p=>String(p.forma).toLowerCase()!=="prazo").reduce((s,p)=>s+Number(p.valor||0),0)),pendente=Math.max(0,total-recebido);
+    const quando=dataHora(venda.created_at,venda.data_visita),situacao=String(venda.situacao_pagamento||"pendente").toLowerCase();
+    const linhasPagamento=pagamentos.length?pagamentos:([{forma:venda.forma_pagamento||"Não informado",valor:recebido}]);
+    return `<div class="comprovante">
+      <header class="comprovante-cabecalho"><div class="comprovante-logo"><img src="images/logo-vovo-maria.png" alt="Logo comercial Vovó Maria Pães e Biscoitos" onerror="this.style.display='none';this.nextElementSibling.style.display='block'"><span class="comprovante-logo-fallback">Vovó Maria<br>Pães e Biscoitos</span></div><div class="comprovante-empresa"><div class="comprovante-razao">${EMPRESA.razaoSocial}</div><div class="comprovante-fantasia">${EMPRESA.nomeFantasia}</div><div>CNPJ: ${EMPRESA.cnpj}</div><div>${EMPRESA.endereco}</div><div>${EMPRESA.cidade}</div><div>WhatsApp: ${EMPRESA.whatsapp}</div><div>Instagram: ${EMPRESA.instagram}</div></div></header>
+      <section class="comprovante-titulo"><h2>COMPROVANTE DE COMPRA</h2><div class="comprovante-identificacao"><strong>Venda nº ${escapar(venda.visita_id??venda.id)}</strong><span>Data: ${escapar(quando.data)}</span><span>Hora: ${escapar(quando.hora)}</span></div></section>
+      <section class="comprovante-secao"><h3>Dados da venda</h3><div class="comprovante-dados"><div><strong>Cliente:</strong> ${escapar(venda.cliente||venda.cliente_nome||"Consumidor")}</div><div><strong>Vendedor:</strong> ${escapar(venda.vendedor||venda.vendedor_nome||"Vendedor")}</div>${venda.documento_cliente?`<div><strong>CNPJ/CPF:</strong> ${escapar(venda.documento_cliente)}</div>`:""}${venda.forma_atendimento?`<div><strong>Atendimento:</strong> ${escapar(venda.forma_atendimento)}</div>`:""}${venda.observacoes?`<div class="linha-inteira comprovante-observacao"><strong>Observações:</strong> ${escapar(venda.observacoes)}</div>`:""}</div></section>
+      <section class="comprovante-secao"><h3>Produtos</h3><table class="comprovante-tabela"><thead><tr><th>Produto</th><th class="numero">Quantidade</th><th class="numero">Valor unitário</th><th class="numero">Valor total</th></tr></thead><tbody>${itens.map(i=>`<tr><td>${escapar(i.produto_nome)}</td><td class="numero">${escapar(i.quantidade)}</td><td class="numero">${dinheiro(i.preco_unitario)}</td><td class="numero">${dinheiro(i.subtotal??Number(i.quantidade||0)*Number(i.preco_unitario||0))}</td></tr>`).join("")||'<tr><td colspan="4">Itens não disponíveis.</td></tr>'}</tbody></table></section>
+      <section class="comprovante-secao comprovante-financeiro"><div class="comprovante-resumo"><h3>Resumo financeiro</h3><div class="comprovante-valor"><span>Subtotal</span><strong>${dinheiro(subtotal)}</strong></div><div class="comprovante-valor"><span>Desconto</span><strong>${dinheiro(desconto)}</strong></div><div class="comprovante-valor"><span>Total bruto</span><strong>${dinheiro(subtotal)}</strong></div><div class="comprovante-valor comprovante-total"><span>TOTAL DA COMPRA</span><strong>${dinheiro(total)}</strong></div><div class="comprovante-valor"><span>Valor recebido</span><strong>${dinheiro(recebido)}</strong></div><div class="comprovante-valor"><span>Valor pendente</span><strong>${dinheiro(pendente)}</strong></div></div><div class="comprovante-pagamentos"><h3>Formas de pagamento</h3>${linhasPagamento.map(p=>`<div class="comprovante-valor"><span>${escapar(rotuloForma(p.forma))}</span><strong>${dinheiro(p.valor)}</strong></div>`).join("")}<div class="comprovante-situacao ${escapar(situacao)}">${escapar(situacao.toUpperCase())}</div></div></section>
+      <footer class="comprovante-rodape"><strong>Obrigado pela preferência!</strong><div>${EMPRESA.nomeFantasia}</div><div>WhatsApp: ${EMPRESA.whatsapp} · Instagram: ${EMPRESA.instagram}</div><div class="comprovante-aviso">Este comprovante não substitui documento fiscal.</div></footer>
+    </div>`;
+  }
+  function textoComprovante(venda,dinheiro){
+    const itens=Array.isArray(venda.itens)?venda.itens:[],pagamentos=Array.isArray(venda.pagamentos)?venda.pagamentos:[];const subtotal=Number(venda.subtotal??itens.reduce((s,i)=>s+Number(i.subtotal||0),0)),desconto=Number(venda.desconto||0),total=Number(venda.valor_total??subtotal-desconto),recebido=Number(venda.valor_recebido??pagamentos.filter(p=>String(p.forma).toLowerCase()!=="prazo").reduce((s,p)=>s+Number(p.valor||0),0)),quando=dataHora(venda.created_at,venda.data_visita);
+    return [EMPRESA.nomeFantasia,"COMPROVANTE DE COMPRA",`Venda nº ${venda.visita_id??venda.id}`,`Data: ${quando.data} | Hora: ${quando.hora}`,`Cliente: ${venda.cliente||venda.cliente_nome||"Consumidor"}`,`Vendedor: ${venda.vendedor||venda.vendedor_nome||"Vendedor"}`,venda.observacoes?`Observações: ${venda.observacoes}`:"","",...itens.map(i=>`${i.produto_nome} | ${i.quantidade} × ${dinheiro(i.preco_unitario)} = ${dinheiro(i.subtotal)}`),"",`Subtotal: ${dinheiro(subtotal)}`,`Desconto: ${dinheiro(desconto)}`,`TOTAL DA COMPRA: ${dinheiro(total)}`,`Recebido: ${dinheiro(recebido)}`,`Pendente: ${dinheiro(Math.max(0,total-recebido))}`,"Pagamentos:",...(pagamentos.length?pagamentos:[{forma:venda.forma_pagamento||"Não informado",valor:recebido}]).map(p=>`${rotuloForma(p.forma)}: ${dinheiro(p.valor)}`),`Situação: ${String(venda.situacao_pagamento||"pendente").toUpperCase()}`,"","Obrigado pela preferência!",`WhatsApp: ${EMPRESA.whatsapp}`,`Instagram: ${EMPRESA.instagram}`,"Este comprovante não substitui documento fiscal."].filter(Boolean).join("\n");
+  }
+  function imprimirComprovante(origem){
+    const comprovante=origem?.classList?.contains("comprovante")?origem:origem?.querySelector?.(".comprovante");
+    if(!comprovante)return;
+    document.getElementById("areaImpressaoComprovante")?.remove();
+    const area=document.createElement("div");area.id="areaImpressaoComprovante";area.appendChild(comprovante.cloneNode(true));document.body.appendChild(area);document.body.classList.add("imprimindo-comprovante");
+    let finalizado=false;const finalizar=()=>{if(finalizado)return;finalizado=true;document.body.classList.remove("imprimindo-comprovante");area.remove();global.removeEventListener?.("afterprint",finalizar)};
+    global.addEventListener?.("afterprint",finalizar,{once:true});global.print();
+  }
+  global.EMPRESA_COMPROVANTE=EMPRESA;global.criarComprovante=criarComprovante;global.textoComprovante=textoComprovante;global.imprimirComprovante=imprimirComprovante;
+})(globalThis);
