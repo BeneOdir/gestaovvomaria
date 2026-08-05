@@ -1202,18 +1202,15 @@ function mostrarTicket(data){
     <div class="actions comprovante-acoes">
       <button type="button" class="btn soft" id="btnCompartilharTicket">Compartilhar comprovante</button>
       <button type="button" class="btn soft" id="btnCopiarTicket">Copiar texto</button>
-      <button type="button" class="btn dark" id="btnImprimirTicket">Imprimir / Salvar em PDF</button>
+      <button type="button" class="btn dark" id="btnImprimirTicket">Imprimir comprovante</button>
     </div>`;
   ticket.style.display = "block";
-  document.getElementById("btnCompartilharTicket").onclick = async () => {
-    if(navigator.share) await navigator.share({ title:"Comprovante de compra", text:ticket.dataset.texto });
-    else await copiarTicket();
-  };
-  document.getElementById("btnCopiarTicket").onclick = copiarTicket;
+  document.getElementById("btnCompartilharTicket").onclick = async () => {const resultado=await compartilharComprovantePdf(data,dinheiro);if(resultado.baixado)setStatus("Compartilhamento de arquivos indisponível; o PDF foi baixado.","ok")};
+  document.getElementById("btnCopiarTicket").onclick = copiarTextoVendaAtual;
   document.getElementById("btnImprimirTicket").onclick = () => imprimirComprovante(ticket);
 }
 
-async function copiarTicket(){
+async function copiarTextoVendaAtual(){
   const texto = document.getElementById("ticket").dataset.texto;
   if(navigator.clipboard?.writeText){
     await navigator.clipboard.writeText(texto);
