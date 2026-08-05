@@ -50,7 +50,7 @@ if(role!=="admin")document.getElementById("filtrosAdmin").hidden=true;
 const dinheiro=formatarMoedaBR;
 let dadosAtuais=null;let textoAtual="";
 let textoComprovanteAtual="";
-function periodo(tipo){const agora=new Date(),hoje=obterDataLocalCuiaba(agora);let ini=hoje,fim=hoje;if(tipo==="semana")ini=somarDiasCuiaba(hoje,-((obterDiaSemanaCuiaba(agora)+6)%7));if(tipo==="mes"){ini=primeiroDiaMesCuiaba(hoje);fim=ultimoDiaMesCuiaba(hoje)}document.getElementById("data_inicial").value=ini;document.getElementById("data_final").value=fim;carregar()}
+function periodo(tipo,carregarApos=true){const agora=new Date(),hoje=obterDataLocalCuiaba(agora);let ini=hoje,fim=hoje;if(tipo==="semana")ini=somarDiasCuiaba(hoje,-((obterDiaSemanaCuiaba(agora)+6)%7));if(tipo==="mes"){ini=primeiroDiaMesCuiaba(hoje);fim=ultimoDiaMesCuiaba(hoje)}document.getElementById("data_inicial").value=ini;document.getElementById("data_final").value=fim;if(carregarApos)carregar()}
 function setStatus(msg,tipo=""){const el=document.getElementById("status");el.textContent=msg;el.className="status nao-imprimir "+tipo}
 function lista(data,campo){return Array.isArray(data?.[campo])?data[campo]:[]}
 function tabela(cabecalho,linhas){if(!linhas.length)return "Nenhum registro.";return `<table><thead><tr>${cabecalho.map(x=>`<th>${x}</th>`).join("")}</tr></thead><tbody>${linhas.map(l=>`<tr>${l.map(x=>`<td>${x??""}</td>`).join("")}</tr>`).join("")}</tbody></table>`}
@@ -149,5 +149,23 @@ document.getElementById("excluirDefinitivamente").onclick=async()=>{
 };
 document.getElementById("cancelarGerenciar").onclick=fecharGerenciamento;
 aplicarMascaraMoeda(document.getElementById("gerenciarRecebido"));aplicarMascaraMoeda(document.getElementById("gerenciarDesconto"));
-document.querySelectorAll("[data-periodo]").forEach(b=>b.onclick=()=>periodo(b.dataset.periodo));document.getElementById("buscar").onclick=carregar;document.getElementById("visao").onchange=atualizarFiltros;document.getElementById("copiar").onclick=()=>copiarTexto(textoAtual);document.getElementById("compartilhar").onclick=async()=>{if(navigator.share)await navigator.share({title:titulo,text:textoAtual});else await copiarTexto(textoAtual)};document.getElementById("imprimir").onclick=()=>window.print();document.getElementById("fecharTicket").onclick=()=>document.getElementById("modalTicket").hidden=true;document.getElementById("copiarTicket").onclick=()=>copiarTexto(textoComprovanteAtual);document.getElementById("compartilharTicket").onclick=async()=>{if(navigator.share)await navigator.share({title:"Comprovante de compra",text:textoComprovanteAtual});else await copiarTexto(textoComprovanteAtual)};document.getElementById("imprimirTicket").onclick=()=>imprimirComprovante(document.getElementById("ticketConteudo"));document.getElementById("sair").onclick=e=>{e.preventDefault();localStorage.clear();location.href="login.html"};atualizarFiltros();carregarVendedores();periodo("hoje");
+function inicializarDatasRelatorio(){periodo("hoje",false)}
+function inicializarFiltroVisao(){const visao=document.getElementById("visao");visao.addEventListener("change",atualizarFiltros);atualizarFiltros()}
+function inicializarTelaRelatorio(){
+  document.querySelectorAll("[data-periodo]").forEach(botao=>botao.addEventListener("click",()=>periodo(botao.dataset.periodo)));
+  document.getElementById("buscar").addEventListener("click",carregar);
+  document.getElementById("copiar").addEventListener("click",()=>copiarTexto(textoAtual));
+  document.getElementById("compartilhar").addEventListener("click",async()=>{if(navigator.share)await navigator.share({title:titulo,text:textoAtual});else await copiarTexto(textoAtual)});
+  document.getElementById("imprimir").addEventListener("click",()=>window.print());
+  document.getElementById("fecharTicket").addEventListener("click",()=>document.getElementById("modalTicket").hidden=true);
+  document.getElementById("copiarTicket").addEventListener("click",()=>copiarTexto(textoComprovanteAtual));
+  document.getElementById("compartilharTicket").addEventListener("click",async()=>{if(navigator.share)await navigator.share({title:"Comprovante de compra",text:textoComprovanteAtual});else await copiarTexto(textoComprovanteAtual)});
+  document.getElementById("imprimirTicket").addEventListener("click",()=>imprimirComprovante(document.getElementById("ticketConteudo")));
+  document.getElementById("sair").addEventListener("click",evento=>{evento.preventDefault();localStorage.clear();location.href="login.html"});
+  inicializarFiltroVisao();
+  inicializarDatasRelatorio();
+  carregarVendedores();
+  carregar();
+}
+if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",inicializarTelaRelatorio,{once:true});else inicializarTelaRelatorio();
 </script></body></html>
