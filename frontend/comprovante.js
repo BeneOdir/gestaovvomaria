@@ -35,13 +35,35 @@
     const itens=Array.isArray(venda.itens)?venda.itens:[],pagamentos=Array.isArray(venda.pagamentos)?venda.pagamentos:[];const subtotal=Number(venda.subtotal??itens.reduce((s,i)=>s+Number(i.subtotal||0),0)),desconto=Number(venda.desconto||0),total=Number(venda.valor_total??subtotal-desconto),recebido=Number(venda.valor_recebido??pagamentos.filter(p=>String(p.forma).toLowerCase()!=="prazo").reduce((s,p)=>s+Number(p.valor||0),0)),quando=dataHora(venda.created_at,venda.data_visita);
     return [EMPRESA.nomeFantasia,"COMPROVANTE DE COMPRA",`Venda nº ${venda.visita_id??venda.id}`,`Data: ${quando.data} | Hora: ${quando.hora}`,`Cliente: ${venda.cliente||venda.cliente_nome||"Consumidor"}`,`Vendedor: ${venda.vendedor||venda.vendedor_nome||"Vendedor"}`,venda.observacoes?`Observações: ${venda.observacoes}`:"","",...itens.map(i=>`${i.produto_nome} | ${i.quantidade} × ${dinheiro(i.preco_unitario)} = ${dinheiro(i.subtotal)}`),"",`Subtotal: ${dinheiro(subtotal)}`,`Desconto: ${dinheiro(desconto)}`,`TOTAL DA COMPRA: ${dinheiro(total)}`,`Recebido: ${dinheiro(recebido)}`,`Pendente: ${dinheiro(Math.max(0,total-recebido))}`,"Pagamentos:",...(pagamentos.length?pagamentos:[{forma:venda.forma_pagamento||"Não informado",valor:recebido}]).map(p=>`${rotuloForma(p.forma)}: ${dinheiro(p.valor)}`),`Situação: ${String(venda.situacao_pagamento||"pendente").toUpperCase()}`,"","Obrigado pela preferência!",`WhatsApp: ${EMPRESA.whatsapp}`,`Instagram: ${EMPRESA.instagram}`,"Este comprovante não substitui documento fiscal."].filter(Boolean).join("\n");
   }
-  function imprimirComprovante(origem){
-    const comprovante=origem?.classList?.contains("comprovante")?origem:origem?.querySelector?.(".comprovante");
-    if(!comprovante)return;
+  function aguardar(ms){return new Promise(resolve=>global.setTimeout(resolve,ms))}
+  function proximoFrame(janela=global){return new Promise(resolve=>{if(janela.requestAnimationFrame)janela.requestAnimationFrame(()=>resolve());else if(global.requestAnimationFrame)global.requestAnimationFrame(()=>resolve());else global.setTimeout(resolve,16)})}
+  async function aguardarRecursosImpressao(janela){
+    const doc=janela.document,folha=doc.getElementById("estiloComprovante");
+    if(folha&&!folha.sheet)await Promise.race([new Promise(resolve=>{folha.addEventListener("load",resolve,{once:true});folha.addEventListener("error",resolve,{once:true})}),aguardar(4000)]);
+    const imagens=[...doc.images].filter(imagem=>!imagem.complete).map(imagem=>new Promise(resolve=>{imagem.addEventListener("load",resolve,{once:true});imagem.addEventListener("error",resolve,{once:true})}));
+    if(imagens.length)await Promise.race([Promise.all(imagens),aguardar(4000)]);
+    if(doc.fonts?.ready)await Promise.race([doc.fonts.ready.catch(()=>{}),aguardar(2000)]);
+    await proximoFrame(janela);await proximoFrame(janela);await aguardar(100);
+  }
+  function imprimirComClone(comprovante){
     document.getElementById("areaImpressaoComprovante")?.remove();
     const area=document.createElement("div");area.id="areaImpressaoComprovante";area.appendChild(comprovante.cloneNode(true));document.body.appendChild(area);document.body.classList.add("imprimindo-comprovante");
     let finalizado=false;const finalizar=()=>{if(finalizado)return;finalizado=true;document.body.classList.remove("imprimindo-comprovante");area.remove();global.removeEventListener?.("afterprint",finalizar)};
-    global.addEventListener?.("afterprint",finalizar,{once:true});global.print();
+    global.addEventListener?.("afterprint",finalizar,{once:true});
+    proximoFrame().then(()=>proximoFrame()).then(()=>aguardar(100)).then(()=>global.print()).catch(finalizar);
+  }
+  async function prepararJanelaImpressao(janela,comprovante){
+    const base=String(document.baseURI||global.location?.href||"").replace(/"/g,"&quot;"),css=new URL("comprovante.css",document.baseURI).href.replace(/"/g,"&quot;");
+    janela.document.open();janela.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><base href="${base}"><title>Comprovante de Compra</title><link id="estiloComprovante" rel="stylesheet" href="${css}"><style>@page{size:A5 portrait;margin:7mm}html,body{margin:0!important;padding:0!important;background:#fff!important;overflow:visible!important}body{width:134mm}.comprovante{width:134mm!important;max-width:134mm!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;box-shadow:none!important}.comprovante-acoes{display:none!important}@media print{html,body{width:134mm!important;min-height:0!important}.comprovante{page:auto!important}}</style></head><body>${comprovante.outerHTML}</body></html>`);janela.document.close();
+    await aguardarRecursosImpressao(janela);janela.focus();
+    let fechada=false;const fechar=()=>{if(fechada)return;fechada=true;try{janela.close()}catch{}};janela.addEventListener?.("afterprint",fechar,{once:true});global.setTimeout(fechar,120000);janela.print();
+  }
+  function imprimirComprovante(origem){
+    const comprovante=origem?.classList?.contains("comprovante")?origem:origem?.querySelector?.(".comprovante");
+    if(!comprovante)return;
+    const janela=global.open?.("","_blank");
+    if(!janela){imprimirComClone(comprovante);return}
+    prepararJanelaImpressao(janela,comprovante).catch(()=>{try{janela.close()}catch{}imprimirComClone(comprovante)});
   }
   global.EMPRESA_COMPROVANTE=EMPRESA;global.criarComprovante=criarComprovante;global.textoComprovante=textoComprovante;global.imprimirComprovante=imprimirComprovante;
 })(globalThis);
