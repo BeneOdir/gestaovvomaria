@@ -52,6 +52,20 @@
     global.addEventListener?.("afterprint",finalizar,{once:true});
     proximoFrame().then(()=>proximoFrame()).then(()=>aguardar(100)).then(()=>global.print()).catch(finalizar);
   }
+  function ambienteAndroidOuPWA(){
+    const android=/Android/i.test(global.navigator?.userAgent||"");
+    const pwa=global.matchMedia?.("(display-mode: standalone)")?.matches===true||global.navigator?.standalone===true;
+    return android||pwa;
+  }
+  function imprimirComprovanteExistente(comprovante){
+    const preservados=[];let atual=comprovante;
+    comprovante.classList.add("comprovante-em-impressao");
+    while(atual&&atual!==document.body){atual.classList.add("manter-na-impressao");preservados.push(atual);atual=atual.parentElement}
+    document.body.classList.add("imprimindo-comprovante-movel");
+    let finalizado=false;const finalizar=()=>{if(finalizado)return;finalizado=true;document.body.classList.remove("imprimindo-comprovante-movel");comprovante.classList.remove("comprovante-em-impressao");preservados.forEach(elemento=>elemento.classList.remove("manter-na-impressao"));global.removeEventListener?.("afterprint",finalizar)};
+    global.addEventListener?.("afterprint",finalizar,{once:true});
+    proximoFrame().then(()=>proximoFrame()).then(()=>aguardar(100)).then(()=>global.print()).catch(finalizar);
+  }
   async function prepararJanelaImpressao(janela,comprovante){
     const base=String(document.baseURI||global.location?.href||"").replace(/"/g,"&quot;"),css=new URL("comprovante.css",document.baseURI).href.replace(/"/g,"&quot;");
     janela.document.open();janela.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><base href="${base}"><title>Comprovante de Compra</title><link id="estiloComprovante" rel="stylesheet" href="${css}"><style>@page{size:A5 portrait;margin:7mm}html,body{margin:0!important;padding:0!important;background:#fff!important;overflow:visible!important}body{width:134mm}.comprovante{width:134mm!important;max-width:134mm!important;margin:0!important;padding:0!important;border:0!important;border-radius:0!important;box-shadow:none!important}.comprovante-acoes{display:none!important}@media print{html,body{width:134mm!important;min-height:0!important}.comprovante{page:auto!important}}</style></head><body>${comprovante.outerHTML}</body></html>`);janela.document.close();
@@ -61,6 +75,7 @@
   function imprimirComprovante(origem){
     const comprovante=origem?.classList?.contains("comprovante")?origem:origem?.querySelector?.(".comprovante");
     if(!comprovante)return;
+    if(ambienteAndroidOuPWA()){imprimirComprovanteExistente(comprovante);return}
     const janela=global.open?.("","_blank");
     if(!janela){imprimirComClone(comprovante);return}
     prepararJanelaImpressao(janela,comprovante).catch(()=>{try{janela.close()}catch{}imprimirComClone(comprovante)});
