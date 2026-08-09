@@ -45,8 +45,8 @@
       <div class="brand">
         <img src="images/logo-vm-gestao.png" class="logo" alt="Vovó Maria">
         <div>
-          <h1>Gestão Comercial Vovó Maria</h1>
-          <div class="sub">Painel principal · CRM · Visitas · Vendas · Relatórios</div>
+          <h1 id="tituloPainel">Gestão Comercial Vovó Maria</h1>
+          <div class="sub" id="subtituloPainel">Painel principal · CRM · Visitas · Vendas · Relatórios</div>
         </div>
       </div>
 
@@ -55,7 +55,7 @@
         Perfil: <span id="perfilUsuario">---</span>
       </div>
 
-      <div class="mission">
+      <div class="mission" id="missaoComercial">
         🎯 Missão 2026: chegar a 1.000 fardos/mês até dezembro.
       </div>
 
@@ -70,7 +70,7 @@
         <span class="badge ok">Disponível</span>
       </a>
 
-      <a class="card" href="visita.html">
+      <a class="card operacao-visible" href="visita.html">
         <div class="icon">🚚</div>
         <div class="title">Visita / Venda</div>
         <div class="desc">Registrar visita, venda, produtos, quantidade, valor e observações.</div>
@@ -153,6 +153,14 @@ document.getElementById("perfilUsuario").textContent = role || "vendedor";
 
 if(role !== "admin"){
   document.querySelectorAll(".admin-only").forEach(el => el.style.display = "none");
+}
+
+if(role === "operacao"){
+  document.getElementById("tituloPainel").textContent = "Operação Vovó Maria";
+  document.getElementById("subtituloPainel").textContent = "Vendas na fábrica · Estoque · Cargas · Produção";
+  document.getElementById("perfilUsuario").textContent = "Operação";
+  document.getElementById("missaoComercial").style.display = "none";
+  document.querySelectorAll(".card:not(.operacao-visible)").forEach(el => el.style.display = "none");
 }
 
 function sair(){

@@ -63,6 +63,7 @@
         <label>Perfil</label>
         <select id="role">
           <option value="vendedor">Vendedor</option>
+          <option value="operacao">Operação</option>
           <option value="admin">Administrador</option>
         </select>
       </div>
@@ -96,6 +97,9 @@ const vendedorRole = localStorage.getItem("vendedorRole") || "";
 if(!token){
   alert("Faça login primeiro.");
   window.location.href = "login.html";
+}else if(vendedorRole !== "admin"){
+  alert("Acesso restrito ao administrador.");
+  window.location.href = "dashboard.html";
 }
 
 document.getElementById("userInfo").textContent = "Logado como: " + vendedorNome;

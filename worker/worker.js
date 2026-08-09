@@ -1,4 +1,21 @@
 const JWT_SECRET = "vovomaria_mvp_2026_trocar_depois";
+const ROLES_PERMITIDOS = new Set(["admin", "vendedor", "operacao"]);
+
+function normalizarRole(role) {
+  return normalizeText(role).toLowerCase();
+}
+
+function rolePermitido(role) {
+  return ROLES_PERMITIDOS.has(normalizarRole(role));
+}
+
+function usuarioTemRole(user, ...roles) {
+  return !!user && roles.includes(user.role);
+}
+
+function acessoNegado() {
+  return json({ error: "Acesso não permitido para este perfil." }, 403);
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -71,11 +88,25 @@ async function jwtVerify(token) {
   return JSON.parse(atob(b));
 }
 
-async function getUser(request) {
+async function getUser(request, env) {
   const auth = request.headers.get("Authorization") || "";
   if (!auth.startsWith("Bearer ")) return null;
   try {
-    return await jwtVerify(auth.replace("Bearer ", ""));
+    const tokenUser = await jwtVerify(auth.replace("Bearer ", ""));
+    const vendedorId = Number(tokenUser?.vendedorId || 0);
+    if (!vendedorId) return null;
+
+    const usuarioAtual = await env.DB.prepare(
+      "SELECT id, nome, role, status FROM vendedores WHERE id = ?"
+    ).bind(vendedorId).first();
+    const role = normalizarRole(usuarioAtual?.role);
+    if (!usuarioAtual || usuarioAtual.status !== "ativo" || !rolePermitido(role)) return null;
+
+    return {
+      vendedorId: Number(usuarioAtual.id),
+      nome: usuarioAtual.nome,
+      role,
+    };
   } catch {
     return null;
   }
@@ -87,15 +118,16 @@ async function login(request, env) {
   const vendedor = await env.DB.prepare(
     "SELECT id, nome, email, senha_hash, role, status FROM vendedores WHERE email = ?"
   ).bind(normalizeText(email)).first();
+  const role = normalizarRole(vendedor?.role);
 
-  if (!vendedor || vendedor.status === "inativo" || senha !== vendedor.senha_hash) {
+  if (!vendedor || vendedor.status !== "ativo" || !rolePermitido(role) || senha !== vendedor.senha_hash) {
     return json({ error: "Credenciais inválidas" }, 401);
   }
 
   const token = await jwtSign({
     vendedorId: vendedor.id,
     nome: vendedor.nome,
-    role: vendedor.role || "vendedor",
+    role,
   });
 
   return json({
@@ -104,7 +136,7 @@ async function login(request, env) {
       id: vendedor.id,
       nome: vendedor.nome,
       email: vendedor.email,
-      role: vendedor.role || "vendedor",
+      role,
     },
   });
 }
@@ -201,6 +233,7 @@ async function obterClienteAvulsoPorId(env, id) {
   return cliente ? json(cliente) : json({ error: "Cliente avulso não encontrado." }, 404);
 }
 async function criarCliente(request, env, user) {
+  if (!usuarioTemRole(user, "admin", "vendedor")) return acessoNegado();
   const entrada = await request.json();
   const c = montarCliente(entrada, user);
   const faltando = validarCliente(c);
@@ -342,6 +375,7 @@ async function listarClientesAvulsos(env) {
 }
 
 async function sync(request, env, user) {
+  if (!usuarioTemRole(user, "admin", "vendedor")) return acessoNegado();
   try {
     const body = await request.json();
     const acoes = Array.isArray(body.acoes) ? body.acoes : [];
@@ -481,6 +515,7 @@ async function gerirProduto(request, env, user, id = null) {
 }
 
 async function criarVisita(request, env, user) {
+  if (!usuarioTemRole(user, "admin", "vendedor", "operacao")) return acessoNegado();
   try {
     const d = await request.json();
     const clienteId = Number(d.cliente_id || 0);
@@ -535,6 +570,7 @@ async function criarVisita(request, env, user) {
 }
 
 async function listarVisitas(request, env, user) {
+  if (!usuarioTemRole(user, "admin", "vendedor", "operacao")) return acessoNegado();
   const url = new URL(request.url);
   const data = url.searchParams.get("data") || obterDataLocalCuiaba();
   let result;
@@ -561,6 +597,7 @@ async function listarVisitas(request, env, user) {
 }
 
 async function relatorioDia(request, env, user) {
+  if (!usuarioTemRole(user, "admin", "vendedor")) return acessoNegado();
   const url = new URL(request.url);
   const data = url.searchParams.get("data") || obterDataLocalCuiaba();
   const filtroVendedor = user.role === "admin" ? "" : " AND vendedor_id = ?";
@@ -605,6 +642,7 @@ async function relatorioDia(request, env, user) {
   return json({ data, resumo, produtos: itens.results || [], visitas: visitas.results || [] });
 }
 async function criarVenda(request, env, user) {
+  if (!usuarioTemRole(user, "admin", "vendedor", "operacao")) return acessoNegado();
   const d = await request.json();
   const clienteId = Number(d.cliente_id || 0);
   const clienteAvulsoId = Number(d.cliente_avulso_id || 0);
@@ -727,6 +765,7 @@ async function criarVenda(request, env, user) {
 const COMISSAO_POR_FARDO = 1.75;
 
 async function relatorioPeriodo(request, env, user, somenteTeste = false) {
+  if (!usuarioTemRole(user, "admin", "vendedor")) return acessoNegado();
   const url = new URL(request.url);
   const hoje = obterDataLocalCuiaba();
   const dataInicial = url.searchParams.get("data_inicial") || url.searchParams.get("data") || hoje;
@@ -743,7 +782,7 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
 
   let visao = visaoSolicitada;
   let vendedorId = vendedorInformado ? Number(vendedorInformado) : null;
-  if (user.role !== "admin") {
+  if (user.role === "vendedor") {
     if (vendedorId && vendedorId !== Number(user.vendedorId)) return json({ error: "Você não pode consultar outro vendedor." }, 403);
     visao = "vendedor";
     vendedorId = Number(user.vendedorId);
@@ -759,7 +798,7 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
 
   let filtro = vendedorId ? " AND v.vendedor_id = ?" : "";
   if (user.role === "admin" && visao === "geral" && origem === "administracao") filtro += " AND EXISTS (SELECT 1 FROM vendedores vo WHERE vo.id = v.vendedor_id AND vo.role = 'admin')";
-  if (user.role === "admin" && visao === "geral" && origem === "vendedores") filtro += " AND EXISTS (SELECT 1 FROM vendedores vo WHERE vo.id = v.vendedor_id AND COALESCE(vo.role, 'vendedor') <> 'admin')";
+  if (user.role === "admin" && visao === "geral" && origem === "vendedores") filtro += " AND EXISTS (SELECT 1 FROM vendedores vo WHERE vo.id = v.vendedor_id AND vo.role = 'vendedor')";
   const filtroTeste = filtroRegistroTeste("v", somenteTeste);
   const params = vendedorId ? [dataInicial, dataFinal, vendedorId] : [dataInicial, dataFinal];
 
@@ -807,8 +846,16 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
   const visitas = await env.DB.prepare(`
     SELECT v.*, COALESCE(c.nome_fantasia, c.razao_social, c.nome_estabelecimento,
       ca.nome_estabelecimento, 'Consumidor') AS cliente_nome,
-      CASE WHEN vd.role = 'admin' THEN 'Administração / Loja' ELSE COALESCE(vd.nome, 'Vendedor') END AS vendedor_nome,
-      CASE WHEN vd.role = 'admin' THEN 'administracao' ELSE 'vendedor' END AS origem
+      CASE
+        WHEN vd.role = 'admin' THEN 'Administração / Loja'
+        WHEN vd.role = 'operacao' THEN 'Operação'
+        ELSE COALESCE(vd.nome, 'Vendedor')
+      END AS vendedor_nome,
+      CASE
+        WHEN vd.role = 'admin' THEN 'administracao'
+        WHEN vd.role = 'operacao' THEN 'operacao'
+        ELSE 'vendedor'
+      END AS origem
     FROM visitas v LEFT JOIN clientes c ON c.id = v.cliente_id
     LEFT JOIN clientes_avulsos ca ON ca.id = v.cliente_avulso_id
     LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
@@ -843,11 +890,12 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
         COALESCE(SUM(v.valor_total - v.valor_recebido), 0) AS total_pendente
       FROM visitas v LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
       WHERE v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
+        AND vd.role IN ('admin', 'vendedor')
       GROUP BY v.vendedor_id, vd.nome ORDER BY total_liquido DESC
     `).bind(...params).all()
     : { results: [] };
 
-  const fechamentoDinheiro = vendedorId && vendedorSelecionado?.role !== "admin"
+  const fechamentoDinheiro = vendedorId && vendedorSelecionado?.role === "vendedor"
     ? await env.DB.prepare(`
       SELECT COUNT(DISTINCT visita_id) AS vendas_dinheiro,
         COALESCE(SUM(valor), 0) AS total_liquido_dinheiro,
@@ -869,7 +917,7 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
     `).bind(...params, ...params).first()
     : { vendas_dinheiro: 0, total_liquido_dinheiro: 0, valor_recebido_dinheiro: 0, total_pendente_dinheiro: 0, diferenca_caixa: 0, valor_a_entregar: 0 };
 
-  const outrasFormas = vendedorId && vendedorSelecionado?.role !== "admin"
+  const outrasFormas = vendedorId && vendedorSelecionado?.role === "vendedor"
     ? await env.DB.prepare(`
       SELECT forma_pagamento, COUNT(DISTINCT visita_id) AS vendas,
         COALESCE(SUM(valor), 0) AS total_liquido,
@@ -892,7 +940,7 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
     `).bind(...params, ...params).all()
     : { results: [] };
 
-  const fardos = vendedorId && vendedorSelecionado?.role !== "admin"
+  const fardos = vendedorId && vendedorSelecionado?.role === "vendedor"
     ? await env.DB.prepare(`
       SELECT COALESCE(SUM(vi.quantidade), 0) AS total_fardos
       FROM visita_itens vi INNER JOIN visitas v ON v.id = vi.visita_id
@@ -931,7 +979,7 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
     vendedor_nome: vendedorSelecionado?.role === "admin" ? "Administração / Loja" : (vendedorSelecionado?.nome || user.nome),
     total_fardos: Number(fardos?.total_fardos || 0),
     comissao_por_fardo: COMISSAO_POR_FARDO,
-    comissao_estimada: vendedorSelecionado?.role === "admin" ? 0 : Number(fardos?.total_fardos || 0) * COMISSAO_POR_FARDO
+    comissao_estimada: vendedorSelecionado?.role === "vendedor" ? Number(fardos?.total_fardos || 0) * COMISSAO_POR_FARDO : 0
   } : null;
 
   return json({ data_inicial: dataInicial, data_final: dataFinal, registros_teste: somenteTeste,
@@ -1075,11 +1123,14 @@ async function criarVendedor(request, env, user) {
   const nome = normalizeText(d.nome);
   const email = normalizeText(d.email).toLowerCase();
   const senha = normalizeText(d.senha || d.senha_hash);
-  const role = normalizeText(d.role || "vendedor");
+  const role = normalizarRole(d.role || "vendedor");
   const status = normalizeText(d.status || "ativo");
 
   if (!nome || !email || !senha) {
     return json({ error: "Nome, e-mail e senha são obrigatórios." }, 400);
+  }
+  if (!rolePermitido(role)) {
+    return json({ error: "Perfil inválido. Use admin, vendedor ou operacao." }, 400);
   }
 
   const existe = await env.DB.prepare(
@@ -1120,8 +1171,12 @@ async function atualizarVendedor(request, env, user, id) {
   const nome = normalizeText(d.nome || atual.nome);
   const email = normalizeText(d.email || atual.email).toLowerCase();
   const senha = normalizeText(d.senha || d.senha_hash || atual.senha_hash);
-  const role = normalizeText(d.role || atual.role || "vendedor");
+  const role = normalizarRole(d.role || atual.role || "vendedor");
   const status = normalizeText(d.status || atual.status || "ativo");
+
+  if (!rolePermitido(role)) {
+    return json({ error: "Perfil inválido. Use admin, vendedor ou operacao." }, 400);
+  }
 
   await env.DB.prepare(`
     UPDATE vendedores
@@ -1136,6 +1191,7 @@ async function atualizarVendedor(request, env, user, id) {
 }
 
 async function debugClientes(request, env, user) {
+  if (!usuarioTemRole(user, "admin")) return acessoNegado();
   const url = new URL(request.url);
   const [clientes, vendedores, visitas, listaClientes] = await Promise.all([
     env.DB.prepare("SELECT COUNT(*) AS total FROM clientes").first(),
@@ -1188,7 +1244,7 @@ export default {
 
     if (url.pathname === "/api/login" && request.method === "POST") return login(request, env);
 
-    const user = await getUser(request);
+    const user = await getUser(request, env);
     if (!user) return json({ error: "Não autorizado" }, 401);
 
 if (url.pathname === "/api/vendedores" && request.method === "GET") {
@@ -1216,6 +1272,7 @@ if (url.pathname.startsWith("/api/vendedores/") && request.method === "PUT") {
     }
     if (url.pathname === "/api/clientes-avulsos" && request.method === "POST") return criarClienteAvulso(request, env, user);
     if (url.pathname === "/api/sync" && request.method === "GET") {
+  if (!usuarioTemRole(user, "admin", "vendedor")) return acessoNegado();
   return json({ status: "ok", rota: "/api/sync", metodo: "use POST" });
 }
 

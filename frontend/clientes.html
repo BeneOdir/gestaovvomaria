@@ -255,6 +255,8 @@ let clienteDetalhado = null;
 if(!token){
   alert("Faça login primeiro.");
   window.location.href = "login.html";
+}else if(vendedorRole === "operacao"){
+  window.location.href = "visita.html";
 }
 
 document.getElementById("userInfo").textContent = "Logado como: " + vendedorNome;

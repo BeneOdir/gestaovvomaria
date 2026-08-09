@@ -259,8 +259,8 @@
   <div class="top">
     <img src="images/logo-vm-gestao.png" class="logo" alt="Gestão Vovó Maria">
     <div>
-      <h1>Registrar visita / venda</h1>
-      <div class="sub">Uso diário do vendedor</div>
+      <h1 id="tituloVenda">Registrar visita / venda</h1>
+      <div class="sub" id="subtituloVenda">Uso diário do vendedor</div>
       <div class="small" id="userInfo"></div>
     </div>
   </div>
@@ -271,8 +271,8 @@
 
   <div class="actions">
     <button class="btn muted" type="button" onclick="location.href='dashboard.html'">Dashboard</button>
-    <button class="btn soft" type="button" onclick="location.href='clientes.html'">Clientes</button>
-    <button class="btn dark" type="button" onclick="location.href='relatorio-dia.html'">Relatório do dia</button>
+    <button class="btn soft" id="navClientes" type="button" onclick="location.href='clientes.html'">Clientes</button>
+    <button class="btn dark" id="navRelatorio" type="button" onclick="location.href='relatorio-dia.html'">Relatório do dia</button>
     <button class="btn soft" id="navProdutos" type="button" onclick="location.href='produtos.html'">Produtos</button>
   </div>
 
@@ -514,6 +514,12 @@ if(!token){
   location.href = "login.html";
 }
 if(vendedorRole !== "admin") document.getElementById("navProdutos").hidden = true;
+if(vendedorRole === "operacao"){
+  document.getElementById("navClientes").hidden = true;
+  document.getElementById("navRelatorio").hidden = true;
+  document.getElementById("tituloVenda").textContent = "Registrar venda";
+  document.getElementById("subtituloVenda").textContent = "Atendimento operacional na fábrica";
+}
 
 document.getElementById("userInfo").textContent = "Logado como: " + vendedorNome;
 

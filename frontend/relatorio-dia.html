@@ -43,6 +43,10 @@ const token=localStorage.getItem("token");
 const role=localStorage.getItem("vendedorRole")||"vendedor";
 const nome=localStorage.getItem("vendedorNome")||"Usuário";
 if(!token)location.href="login.html";
+if(role==="operacao"){
+  alert("Relatórios gerenciais não estão disponíveis para o perfil Operação.");
+  location.href="dashboard.html";
+}
 if(role!=="admin")document.getElementById("navProdutos").hidden=true;
 let titulo=role==="admin"?"Relatório geral":"Relatório do vendedor";
 document.getElementById("tituloTela").textContent=titulo;
@@ -105,7 +109,7 @@ function renderizar(d){
 }
 async function carregar(){const ini=document.getElementById("data_inicial").value,fim=document.getElementById("data_final").value;const params=new URLSearchParams({data_inicial:ini,data_final:fim});if(role==="admin"){params.set("visao",document.getElementById("visao").value);params.set("origem",document.getElementById("origem").value);const vendedor=document.getElementById("vendedor_id").value;if(vendedor)params.set("vendedor_id",vendedor)}try{setStatus("Carregando...");const resp=await fetch(`${API_URL}/api/relatorio-dia?${params}`,{headers:{Authorization:"Bearer "+token}});const d=await resp.json().catch(()=>({}));if(!resp.ok)throw new Error(d.error||"Erro ao carregar relatório");renderizar(d)}catch(e){setStatus(e.message,"err")}}
 
-async function carregarVendedores(){if(role!=="admin")return;try{const resp=await fetch(`${API_URL}/api/vendedores`,{headers:{Authorization:"Bearer "+token}});const dados=await resp.json();if(!resp.ok)throw new Error(dados.error||"Erro ao listar vendedores");const ativos=dados.filter(v=>v.status==="ativo"&&v.role!=="admin");document.getElementById("vendedor_id").innerHTML='<option value="">Selecione</option>'+ativos.map(v=>`<option value="${Number(v.id)}">${escapar(v.nome)}</option>`).join("")}catch(e){setStatus(e.message,"err")}}
+async function carregarVendedores(){if(role!=="admin")return;try{const resp=await fetch(`${API_URL}/api/vendedores`,{headers:{Authorization:"Bearer "+token}});const dados=await resp.json();if(!resp.ok)throw new Error(dados.error||"Erro ao listar vendedores");const ativos=dados.filter(v=>v.status==="ativo"&&v.role==="vendedor");document.getElementById("vendedor_id").innerHTML='<option value="">Selecione</option>'+ativos.map(v=>`<option value="${Number(v.id)}">${escapar(v.nome)}</option>`).join("")}catch(e){setStatus(e.message,"err")}}
 function atualizarFiltros(){const individual=document.getElementById("visao").value==="vendedor";document.getElementById("campoVendedor").hidden=!individual;document.getElementById("campoOrigem").hidden=individual;if(!individual)document.getElementById("vendedor_id").value=""}
 function abrirTicket(id){const venda=lista(dadosAtuais,"visitas").find(v=>Number(v.id)===id);if(!venda)return;vendaComprovanteAtual=venda;const conteudo=document.getElementById("ticketConteudo");conteudo.innerHTML=criarComprovante(venda,dinheiro);textoComprovanteAtual=textoComprovante(venda,dinheiro);document.getElementById("modalTicket").hidden=false;prepararPdfComprovante(venda,dinheiro,conteudo)}
 let visitaGerenciadaId=null;
