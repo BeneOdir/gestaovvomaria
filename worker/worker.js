@@ -475,7 +475,7 @@ async function listarProdutos(request, env, user) {
   const result = await env.DB.prepare(
     incluirInativos
       ? "SELECT * FROM produtos ORDER BY nome"
-      : "SELECT * FROM produtos WHERE ativo = 1 OR ativo = 'ativo' ORDER BY nome"
+      : "SELECT * FROM produtos WHERE ativo = 'ativo' ORDER BY nome"
   ).all();
 
   return json(result.results || []);
@@ -491,16 +491,23 @@ function converterPrecoProduto(valor) {
   return Number(normalizado);
 }
 
+const STATUS_PRODUTO_PERMITIDOS = new Set(["ativo", "inativo"]);
+
+function normalizarStatusProduto(valor) {
+  const status = typeof valor === "string" ? normalizeText(valor) : "";
+  return STATUS_PRODUTO_PERMITIDOS.has(status) ? status : null;
+}
+
 async function gerirProduto(request, env, user, id = null) {
   try {
     if (user.role !== "admin") return json({ error: "Acesso restrito ao administrador" }, 403);
     const d = await request.json();
     const nome = normalizeText(d.nome);
-    const preco = converterPrecoProduto(d.preco_padrao ?? d.preco);
-    const situacao = d.ativo ?? d.status;
-    const ativo = situacao === false || situacao === 0 || situacao === "0" || situacao === "inativo" ? "inativo" : "ativo";
+    const preco = converterPrecoProduto(d.preco);
+    const ativo = normalizarStatusProduto(d.ativo);
     if (!nome) return json({ error: "Informe o nome do produto." }, 400);
     if (!Number.isFinite(preco) || preco < 0) return json({ error: "Informe um preço válido e não negativo." }, 400);
+    if (!ativo) return json({ error: "Status inválido. Use ativo ou inativo." }, 400);
 
     if (id) {
       if (!Number.isInteger(id) || id <= 0) return json({ error: "ID de produto inválido." }, 400);
@@ -1113,6 +1120,261 @@ async function excluirVisitaAdmin(request, env, user, id) {
   }
 }
 
+function acessoProducaoPermitido(user) {
+  return usuarioTemRole(user, "admin", "operacao");
+}
+
+function arredondarMoeda(valor) {
+  return Math.round((Number(valor) + Number.EPSILON) * 100) / 100;
+}
+
+async function listarParametrosProducao(env, user) {
+  if (!acessoProducaoPermitido(user)) return acessoNegado();
+
+  const resultado = await env.DB.prepare(`
+    SELECT
+      p.id AS produto_id,
+      p.nome AS produto_nome,
+      parametro.pacotes_por_fardo,
+      parametro.valor_por_pacote,
+      parametro.ativo AS parametro_ativo,
+      parametro.updated_at AS parametro_atualizado_em
+    FROM produtos p
+    LEFT JOIN producao_parametros_produto parametro
+      ON parametro.produto_id = p.id
+    WHERE p.ativo = 'ativo'
+    ORDER BY p.nome
+  `).all();
+
+  return json(resultado.results || []);
+}
+
+async function salvarParametroProducao(request, env, user, produtoId) {
+  if (!usuarioTemRole(user, "admin")) return acessoNegado();
+  if (!Number.isInteger(produtoId) || produtoId <= 0) return json({ error: "Produto inválido." }, 400);
+
+  const dados = await request.json();
+  const pacotesPorFardo = Number(dados.pacotes_por_fardo);
+  const valorPorPacote = Number(dados.valor_por_pacote);
+  const ativo = dados.ativo === false || dados.ativo === 0 || dados.ativo === "0" ? 0 : 1;
+
+  if (!Number.isInteger(pacotesPorFardo) || pacotesPorFardo <= 0) {
+    return json({ error: "Pacotes por fardo deve ser um número inteiro maior que zero." }, 400);
+  }
+  if (!Number.isFinite(valorPorPacote) || valorPorPacote < 0) {
+    return json({ error: "Valor por pacote deve ser maior ou igual a zero." }, 400);
+  }
+
+  const produto = await env.DB.prepare(`
+    SELECT id, nome FROM produtos
+    WHERE id = ? AND ativo = 'ativo'
+  `).bind(produtoId).first();
+  if (!produto) return json({ error: "Produto ativo não encontrado." }, 404);
+
+  await env.DB.prepare(`
+    INSERT INTO producao_parametros_produto (
+      produto_id, pacotes_por_fardo, valor_por_pacote, ativo, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ON CONFLICT(produto_id) DO UPDATE SET
+      pacotes_por_fardo = excluded.pacotes_por_fardo,
+      valor_por_pacote = excluded.valor_por_pacote,
+      ativo = excluded.ativo,
+      updated_at = CURRENT_TIMESTAMP
+  `).bind(produtoId, pacotesPorFardo, valorPorPacote, ativo).run();
+
+  const parametro = await env.DB.prepare(`
+    SELECT id, produto_id, pacotes_por_fardo, valor_por_pacote, ativo, created_at, updated_at
+    FROM producao_parametros_produto WHERE produto_id = ?
+  `).bind(produtoId).first();
+
+  return json({ success: true, produto, parametro });
+}
+
+async function buscarRegistroProducaoPorChave(env, chave) {
+  return env.DB.prepare(`
+    SELECT * FROM producao_registros WHERE chave_idempotencia = ?
+  `).bind(chave).first();
+}
+
+async function buscarEntradaEstoqueDaProducao(env, producaoId) {
+  return env.DB.prepare(`
+    SELECT
+      o.id AS operacao_id, o.tipo, o.status, o.data_operacao,
+      o.origem_tipo, o.origem_id, o.chave_idempotencia,
+      m.id AS movimentacao_id, m.local_id, m.produto_id,
+      m.quantidade, m.efeito
+    FROM estoque_operacoes o
+    INNER JOIN estoque_movimentacoes m ON m.operacao_id = o.id
+    WHERE o.tipo = 'ENTRADA_PRODUCAO'
+      AND o.origem_tipo = 'PRODUCAO'
+      AND o.origem_id = ?
+      AND o.chave_idempotencia = 'PRODUCAO:' || CAST(? AS TEXT)
+    LIMIT 1
+  `).bind(producaoId, producaoId).first();
+}
+
+async function registrarProducao(request, env, user) {
+  if (!acessoProducaoPermitido(user)) return acessoNegado();
+
+  const dados = await request.json();
+  const produtoId = Number(dados.produto_id || 0);
+  const quantidadeFardos = Number(dados.quantidade_fardos);
+  const dataProducao = normalizeText(dados.data_producao || obterDataLocalCuiaba());
+  const observacao = normalizeText(dados.observacao);
+  const chaveRecebida = normalizeText(dados.chave_idempotencia);
+
+  if (!Number.isInteger(produtoId) || produtoId <= 0) return json({ error: "Selecione um produto válido." }, 400);
+  if (!Number.isInteger(quantidadeFardos) || quantidadeFardos <= 0) {
+    return json({ error: "A quantidade de fardos concluídos deve ser um número inteiro maior que zero." }, 400);
+  }
+  if (!dataOperacionalValida(dataProducao)) return json({ error: "Data da produção inválida." }, 400);
+  if (!chaveRecebida || chaveRecebida.length > 180) return json({ error: "Chave de idempotência inválida." }, 400);
+
+  const produto = await env.DB.prepare(`
+    SELECT
+      p.id, p.nome,
+      parametro.pacotes_por_fardo,
+      parametro.valor_por_pacote
+    FROM produtos p
+    INNER JOIN producao_parametros_produto parametro
+      ON parametro.produto_id = p.id AND parametro.ativo = 1
+    WHERE p.id = ? AND p.ativo = 'ativo'
+  `).bind(produtoId).first();
+  if (!produto) return json({ error: "Produto ativo sem parâmetros de produção ativos." }, 409);
+
+  const pacotesPorFardo = Number(produto.pacotes_por_fardo);
+  const valorPorPacote = Number(produto.valor_por_pacote);
+  if (!Number.isInteger(pacotesPorFardo) || pacotesPorFardo <= 0 || !Number.isFinite(valorPorPacote) || valorPorPacote < 0) {
+    return json({ error: "Parâmetros de produção inválidos." }, 409);
+  }
+
+  const quantidadePacotes = quantidadeFardos * pacotesPorFardo;
+  const valorProducao = arredondarMoeda(quantidadePacotes * valorPorPacote);
+  const chave = `PRODUCAO:${chaveRecebida}`;
+  const local = await obterEstoqueCentral(env);
+  if (!local) return json({ error: "Estoque Central ainda não foi inicializado." }, 409);
+
+  const existente = await buscarRegistroProducaoPorChave(env, chave);
+  if (existente) {
+    const entradaEstoque = await buscarEntradaEstoqueDaProducao(env, existente.id);
+    if (!entradaEstoque) {
+      return json({
+        error: "A produção já existe, mas sua entrada de estoque não foi encontrada. Solicite auditoria antes de repetir a operação.",
+        producao_id: existente.id,
+      }, 409);
+    }
+    return json({ success: true, idempotente: true, registro: existente, entrada_estoque: entradaEstoque });
+  }
+
+  try {
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO producao_registros (
+          produto_id, usuario_id, data_producao, quantidade_fardos,
+          pacotes_por_fardo_snapshot, quantidade_pacotes,
+          valor_por_pacote_snapshot, valor_producao,
+          observacao, chave_idempotencia, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      `).bind(
+        produtoId, user.vendedorId, dataProducao, quantidadeFardos,
+        pacotesPorFardo, quantidadePacotes, valorPorPacote, valorProducao,
+        observacao || null, chave
+      ),
+      env.DB.prepare(`
+        INSERT INTO estoque_operacoes (
+          tipo, status, data_operacao, origem_tipo, origem_id,
+          chave_idempotencia, operacao_estornada_id, usuario_id,
+          observacao, created_at
+        )
+        SELECT
+          'ENTRADA_PRODUCAO', 'CONFIRMADA', data_producao, 'PRODUCAO', id,
+          'PRODUCAO:' || CAST(id AS TEXT), NULL, usuario_id,
+          'Entrada automática da Produção #' || CAST(id AS TEXT),
+          CURRENT_TIMESTAMP
+        FROM producao_registros
+        WHERE chave_idempotencia = ?
+      `).bind(chave),
+      env.DB.prepare(`
+        INSERT INTO estoque_movimentacoes (
+          operacao_id, local_id, produto_id, carga_id, carga_item_id,
+          visita_id, visita_item_id, quantidade, efeito, created_at
+        )
+        SELECT
+          o.id, ?, r.produto_id, NULL, NULL, NULL, NULL,
+          r.quantidade_fardos, 1, CURRENT_TIMESTAMP
+        FROM producao_registros r
+        INNER JOIN estoque_operacoes o
+          ON o.origem_tipo = 'PRODUCAO'
+          AND o.origem_id = r.id
+          AND o.chave_idempotencia = 'PRODUCAO:' || CAST(r.id AS TEXT)
+        WHERE r.chave_idempotencia = ?
+      `).bind(local.id, chave),
+    ]);
+  } catch (err) {
+    const concorrente = await buscarRegistroProducaoPorChave(env, chave);
+    if (concorrente) {
+      const entradaConcorrente = await buscarEntradaEstoqueDaProducao(env, concorrente.id);
+      if (entradaConcorrente) {
+        return json({ success: true, idempotente: true, registro: concorrente, entrada_estoque: entradaConcorrente });
+      }
+    }
+    throw err;
+  }
+
+  const registro = await buscarRegistroProducaoPorChave(env, chave);
+  const entradaEstoque = await buscarEntradaEstoqueDaProducao(env, registro.id);
+  if (!entradaEstoque) throw new Error("A transação não confirmou a entrada da produção no estoque.");
+
+  return json({
+    success: true,
+    idempotente: false,
+    registro,
+    entrada_estoque: entradaEstoque,
+    produto: { id: produto.id, nome: produto.nome },
+  }, 201);
+}
+
+async function listarRegistrosProducao(request, env, user) {
+  if (!acessoProducaoPermitido(user)) return acessoNegado();
+
+  const url = new URL(request.url);
+  const produtoId = Number(url.searchParams.get("produto_id") || 0);
+  const usuarioId = Number(url.searchParams.get("usuario_id") || 0);
+  const dataInicial = normalizeText(url.searchParams.get("data_inicial"));
+  const dataFinal = normalizeText(url.searchParams.get("data_final"));
+
+  if (produtoId && (!Number.isInteger(produtoId) || produtoId <= 0)) return json({ error: "Produto inválido." }, 400);
+  if (usuarioId && (!Number.isInteger(usuarioId) || usuarioId <= 0)) return json({ error: "Usuário inválido." }, 400);
+  if (dataInicial && !dataOperacionalValida(dataInicial)) return json({ error: "Data inicial inválida." }, 400);
+  if (dataFinal && !dataOperacionalValida(dataFinal)) return json({ error: "Data final inválida." }, 400);
+  if (dataInicial && dataFinal && dataInicial > dataFinal) return json({ error: "Período inválido." }, 400);
+
+  const filtros = ["1 = 1"];
+  const parametros = [];
+  if (produtoId) { filtros.push("registro.produto_id = ?"); parametros.push(produtoId); }
+  if (usuarioId) { filtros.push("registro.usuario_id = ?"); parametros.push(usuarioId); }
+  if (dataInicial) { filtros.push("registro.data_producao >= ?"); parametros.push(dataInicial); }
+  if (dataFinal) { filtros.push("registro.data_producao <= ?"); parametros.push(dataFinal); }
+
+  const resultado = await env.DB.prepare(`
+    SELECT
+      registro.id, registro.produto_id, p.nome AS produto_nome,
+      registro.usuario_id, v.nome AS usuario_nome,
+      registro.data_producao, registro.quantidade_fardos,
+      registro.pacotes_por_fardo_snapshot, registro.quantidade_pacotes,
+      registro.valor_por_pacote_snapshot, registro.valor_producao,
+      registro.observacao, registro.created_at
+    FROM producao_registros registro
+    INNER JOIN produtos p ON p.id = registro.produto_id
+    LEFT JOIN vendedores v ON v.id = registro.usuario_id
+    WHERE ${filtros.join(" AND ")}
+    ORDER BY registro.data_producao DESC, registro.id DESC
+    LIMIT 500
+  `).bind(...parametros).all();
+
+  return json(resultado.results || []);
+}
+
 const TIPOS_OPERACAO_ESTOQUE = new Set([
   "INVENTARIO_INICIAL", "ENTRADA", "TRANSFERENCIA_CARGA", "SAIDA_VENDA",
   "RETORNO_CARGA", "AJUSTE_ENTRADA", "AJUSTE_SAIDA", "INVENTARIO_AJUSTE",
@@ -1184,7 +1446,7 @@ async function consultarEstoqueCentral(env, user) {
     LEFT JOIN estoque_movimentacoes m
       ON m.produto_id = p.id AND m.local_id = ?
     LEFT JOIN estoque_operacoes o ON o.id = m.operacao_id
-    WHERE p.ativo = 1 OR p.ativo = 'ativo'
+    WHERE p.ativo = 'ativo'
     GROUP BY p.id, p.nome
     ORDER BY p.nome
   `).bind(local.id, local.id).all();
@@ -1235,6 +1497,7 @@ async function listarMovimentacoesEstoque(request, env, user) {
       m.id, m.operacao_id, m.produto_id, p.nome AS produto_nome,
       m.quantidade, m.efeito, m.created_at,
       o.tipo, o.status, o.data_operacao, o.origem_tipo,
+      o.origem_id,
       o.usuario_id, v.nome AS usuario_nome, o.observacao,
       o.chave_idempotencia
     FROM estoque_movimentacoes m
@@ -1282,7 +1545,7 @@ async function registrarMovimentoEstoque(request, env, user, configuracao) {
 
   const produto = await env.DB.prepare(`
     SELECT id, nome FROM produtos
-    WHERE id = ? AND (ativo = 1 OR ativo = 'ativo')
+    WHERE id = ? AND ativo = 'ativo'
   `).bind(produtoId).first();
   if (!produto) return json({ error: "Produto ativo não encontrado." }, 404);
 
@@ -1546,6 +1809,12 @@ if (url.pathname === "/api/sync" && request.method === "POST") {
     if (url.pathname.startsWith("/api/produtos/") && request.method === "PUT") {
       return await gerirProduto(request, env, user, Number(url.pathname.split("/").pop()));
     }
+    if (url.pathname === "/api/producao/parametros" && request.method === "GET") return listarParametrosProducao(env, user);
+    if (/^\/api\/producao\/parametros\/\d+$/.test(url.pathname) && request.method === "PUT") {
+      return salvarParametroProducao(request, env, user, Number(url.pathname.split("/").pop()));
+    }
+    if (url.pathname === "/api/producao/registros" && request.method === "GET") return listarRegistrosProducao(request, env, user);
+    if (url.pathname === "/api/producao/registros" && request.method === "POST") return registrarProducao(request, env, user);
     if (url.pathname === "/api/estoque/central" && request.method === "GET") return consultarEstoqueCentral(env, user);
     if (url.pathname === "/api/estoque/central/inicializar" && request.method === "POST") return inicializarEstoqueCentral(env, user);
     if (url.pathname === "/api/estoque/movimentacoes" && request.method === "GET") return listarMovimentacoesEstoque(request, env, user);
