@@ -1,5 +1,6 @@
 const JWT_SECRET = "vovomaria_mvp_2026_trocar_depois";
 const ROLES_PERMITIDOS = new Set(["admin", "vendedor", "operacao"]);
+const CANAIS_VENDA_PERMITIDOS = new Set(["ROTA", "LOJA_FABRICA"]);
 
 function normalizarRole(role) {
   return normalizeText(role).toLowerCase();
@@ -15,6 +16,15 @@ function usuarioTemRole(user, ...roles) {
 
 function acessoNegado() {
   return json({ error: "Acesso não permitido para este perfil." }, 403);
+}
+
+function resolverCanalVenda(user, canalInformado) {
+  if (usuarioTemRole(user, "vendedor")) return "ROTA";
+  if (usuarioTemRole(user, "operacao")) return "LOJA_FABRICA";
+  if (!usuarioTemRole(user, "admin")) return null;
+
+  const canal = normalizeText(canalInformado || "LOJA_FABRICA").toUpperCase();
+  return CANAIS_VENDA_PERMITIDOS.has(canal) ? canal : null;
 }
 
 const corsHeaders = {
@@ -518,12 +528,14 @@ async function criarVisita(request, env, user) {
   if (!usuarioTemRole(user, "admin", "vendedor", "operacao")) return acessoNegado();
   try {
     const d = await request.json();
+    const canalVenda = resolverCanalVenda(user, d.canal_venda);
     const clienteId = Number(d.cliente_id || 0);
     const dataVisita = normalizeText(d.data_visita || obterDataLocalCuiaba());
     const comprou = d.comprou === "sim" || d.comprou === true ? "sim" : "nao";
     const observacoes = normalizeText(d.observacoes);
     const itens = Array.isArray(d.itens) ? d.itens : [];
 
+    if (!canalVenda) return json({ error: "Canal da venda inválido. Use ROTA ou LOJA_FABRICA." }, 400);
     if (!clienteId) return json({ error: "Selecione um cliente." }, 400);
 
     const cliente = await env.DB.prepare("SELECT id, nome_fantasia, razao_social, vendedor_id FROM clientes WHERE id = ?").bind(clienteId).first();
@@ -547,9 +559,9 @@ async function criarVisita(request, env, user) {
       .filter(i => i.quantidade > 0 && i.produto_nome);
 
     const visitaRes = await env.DB.prepare(`
-      INSERT INTO visitas (vendedor_id, cliente_id, data_visita, comprou, valor_total, observacoes, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `).bind(user.vendedorId, clienteId, dataVisita, comprou, valorTotal, observacoes).run();
+      INSERT INTO visitas (vendedor_id, cliente_id, data_visita, canal_venda, comprou, valor_total, observacoes, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).bind(user.vendedorId, clienteId, dataVisita, canalVenda, comprou, valorTotal, observacoes).run();
 
     const visitaId = visitaRes.meta.last_row_id;
 
@@ -644,6 +656,7 @@ async function relatorioDia(request, env, user) {
 async function criarVenda(request, env, user) {
   if (!usuarioTemRole(user, "admin", "vendedor", "operacao")) return acessoNegado();
   const d = await request.json();
+  const canalVenda = resolverCanalVenda(user, d.canal_venda);
   const clienteId = Number(d.cliente_id || 0);
   const clienteAvulsoId = Number(d.cliente_avulso_id || 0);
   const dataVisita = normalizeText(d.data_visita || obterDataLocalCuiaba());
@@ -654,6 +667,7 @@ async function criarVenda(request, env, user) {
     ? d.itens
     : (Array.isArray(d.produtos) ? d.produtos : []);
 
+  if (!canalVenda) return json({ error: "Canal da venda inválido. Use ROTA ou LOJA_FABRICA." }, 400);
   if (!user?.vendedorId) return json({ error: "Vendedor autenticado não identificado." }, 401);
   if ((!clienteId && !clienteAvulsoId) || (clienteId && clienteAvulsoId)) {
     return json({ error: "Selecione exatamente um cliente cadastrado ou avulso." }, 400);
@@ -710,11 +724,11 @@ async function criarVenda(request, env, user) {
 
   const visitaRes = await env.DB.prepare(`
     INSERT INTO visitas (
-      vendedor_id, cliente_id, cliente_avulso_id, data_visita, comprou,
+      vendedor_id, cliente_id, cliente_avulso_id, data_visita, canal_venda, comprou,
       valor_total, observacoes, forma_pagamento, valor_recebido, desconto,
       situacao_pagamento, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-  `).bind(user.vendedorId, clienteId || 0, clienteAvulsoId || null, dataVisita, comprou,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).bind(user.vendedorId, clienteId || 0, clienteAvulsoId || null, dataVisita, canalVenda, comprou,
     valorTotal, observacoes, formaPagamento, valorRecebido, desconto, situacaoPagamento).run();
   const visitaId = visitaRes.meta.last_row_id;
 
@@ -753,7 +767,7 @@ async function criarVenda(request, env, user) {
   } catch {}
 
   return json({
-    success: true, visita_id: visitaId, data_visita: dataVisita, created_at: createdAt,
+    success: true, visita_id: visitaId, data_visita: dataVisita, canal_venda: canalVenda, created_at: createdAt,
     cliente: cliente.nome_fantasia || cliente.razao_social || cliente.nome_estabelecimento || "Consumidor",
     vendedor: user.nome || "Vendedor", itens, subtotal, desconto,
     valor_total: valorTotal, valor_recebido: valorRecebido,
@@ -1099,6 +1113,253 @@ async function excluirVisitaAdmin(request, env, user, id) {
   }
 }
 
+const TIPOS_OPERACAO_ESTOQUE = new Set([
+  "INVENTARIO_INICIAL", "ENTRADA", "TRANSFERENCIA_CARGA", "SAIDA_VENDA",
+  "RETORNO_CARGA", "AJUSTE_ENTRADA", "AJUSTE_SAIDA", "INVENTARIO_AJUSTE",
+  "ESTORNO", "ENTRADA_PRODUCAO"
+]);
+
+function acessoEstoquePermitido(user) {
+  return usuarioTemRole(user, "admin", "operacao");
+}
+
+function dataOperacionalValida(data) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalizeText(data));
+}
+
+async function obterEstoqueCentral(env) {
+  return env.DB.prepare(`
+    SELECT id, nome, tipo, ativo, created_at, updated_at
+    FROM estoque_locais
+    WHERE tipo = 'CENTRAL' AND ativo = 1
+    ORDER BY id
+    LIMIT 1
+  `).first();
+}
+
+async function inicializarEstoqueCentral(env, user) {
+  if (!usuarioTemRole(user, "admin")) return acessoNegado();
+
+  const existente = await obterEstoqueCentral(env);
+  if (existente) return json({ success: true, criado: false, local: existente });
+
+  let criado = true;
+  try {
+    await env.DB.prepare(`
+      INSERT INTO estoque_locais (nome, tipo, vendedor_id, ativo, created_at, updated_at)
+      VALUES ('ESTOQUE CENTRAL', 'CENTRAL', NULL, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `).run();
+  } catch (err) {
+    const criadoConcorrentemente = await obterEstoqueCentral(env);
+    if (!criadoConcorrentemente) throw err;
+    criado = false;
+  }
+
+  const local = await obterEstoqueCentral(env);
+  return json({ success: true, criado, local }, criado ? 201 : 200);
+}
+
+async function consultarEstoqueCentral(env, user) {
+  if (!acessoEstoquePermitido(user)) return acessoNegado();
+
+  const local = await obterEstoqueCentral(env);
+  if (!local) {
+    return json({ local: null, inicializacao_necessaria: true, produtos: [] });
+  }
+
+  const resultado = await env.DB.prepare(`
+    SELECT
+      p.id AS produto_id,
+      p.nome AS produto_nome,
+      COALESCE(SUM(m.quantidade * m.efeito), 0) AS saldo_atual,
+      MAX(m.created_at) AS ultima_movimentacao,
+      CASE WHEN EXISTS (
+        SELECT 1
+        FROM estoque_operacoes inventario
+        WHERE inventario.tipo = 'INVENTARIO_INICIAL'
+          AND inventario.chave_idempotencia =
+            'INVENTARIO_INICIAL:' || CAST(? AS INTEGER) || ':' || CAST(p.id AS INTEGER)
+      ) THEN 1 ELSE 0 END AS inventario_inicial_registrado
+    FROM produtos p
+    LEFT JOIN estoque_movimentacoes m
+      ON m.produto_id = p.id AND m.local_id = ?
+    LEFT JOIN estoque_operacoes o ON o.id = m.operacao_id
+    WHERE p.ativo = 1 OR p.ativo = 'ativo'
+    GROUP BY p.id, p.nome
+    ORDER BY p.nome
+  `).bind(local.id, local.id).all();
+
+  const produtos = (resultado.results || []).map(produto => {
+    const saldo = Number(produto.saldo_atual || 0);
+    return {
+      ...produto,
+      saldo_atual: saldo,
+      inventario_inicial_registrado: Number(produto.inventario_inicial_registrado || 0) === 1,
+      situacao: saldo < 0 ? "DIVERGENCIA" : saldo === 0 ? "ZERADO" : "DISPONIVEL",
+    };
+  });
+
+  return json({ local, inicializacao_necessaria: false, produtos });
+}
+
+async function listarMovimentacoesEstoque(request, env, user) {
+  if (!acessoEstoquePermitido(user)) return acessoNegado();
+
+  const local = await obterEstoqueCentral(env);
+  if (!local) return json({ local: null, movimentacoes: [] });
+
+  const url = new URL(request.url);
+  const produtoId = Number(url.searchParams.get("produto_id") || 0);
+  const usuarioId = Number(url.searchParams.get("usuario_id") || 0);
+  const tipo = normalizeText(url.searchParams.get("tipo")).toUpperCase();
+  const dataInicial = normalizeText(url.searchParams.get("data_inicial"));
+  const dataFinal = normalizeText(url.searchParams.get("data_final"));
+
+  if (produtoId && (!Number.isInteger(produtoId) || produtoId <= 0)) return json({ error: "Produto inválido." }, 400);
+  if (usuarioId && (!Number.isInteger(usuarioId) || usuarioId <= 0)) return json({ error: "Usuário inválido." }, 400);
+  if (tipo && !TIPOS_OPERACAO_ESTOQUE.has(tipo)) return json({ error: "Tipo de operação inválido." }, 400);
+  if (dataInicial && !dataOperacionalValida(dataInicial)) return json({ error: "Data inicial inválida." }, 400);
+  if (dataFinal && !dataOperacionalValida(dataFinal)) return json({ error: "Data final inválida." }, 400);
+  if (dataInicial && dataFinal && dataInicial > dataFinal) return json({ error: "Período inválido." }, 400);
+
+  const filtros = ["m.local_id = ?"];
+  const parametros = [local.id];
+  if (produtoId) { filtros.push("m.produto_id = ?"); parametros.push(produtoId); }
+  if (usuarioId) { filtros.push("o.usuario_id = ?"); parametros.push(usuarioId); }
+  if (tipo) { filtros.push("o.tipo = ?"); parametros.push(tipo); }
+  if (dataInicial) { filtros.push("o.data_operacao >= ?"); parametros.push(dataInicial); }
+  if (dataFinal) { filtros.push("o.data_operacao <= ?"); parametros.push(dataFinal); }
+
+  const resultado = await env.DB.prepare(`
+    SELECT
+      m.id, m.operacao_id, m.produto_id, p.nome AS produto_nome,
+      m.quantidade, m.efeito, m.created_at,
+      o.tipo, o.status, o.data_operacao, o.origem_tipo,
+      o.usuario_id, v.nome AS usuario_nome, o.observacao,
+      o.chave_idempotencia
+    FROM estoque_movimentacoes m
+    INNER JOIN estoque_operacoes o ON o.id = m.operacao_id
+    INNER JOIN produtos p ON p.id = m.produto_id
+    LEFT JOIN vendedores v ON v.id = o.usuario_id
+    WHERE ${filtros.join(" AND ")}
+    ORDER BY o.data_operacao DESC, m.id DESC
+    LIMIT 500
+  `).bind(...parametros).all();
+
+  return json({ local, movimentacoes: resultado.results || [] });
+}
+
+async function buscarOperacaoPorChave(env, chave) {
+  return env.DB.prepare(`
+    SELECT id, tipo, status, data_operacao, chave_idempotencia, usuario_id, observacao, created_at
+    FROM estoque_operacoes
+    WHERE chave_idempotencia = ?
+  `).bind(chave).first();
+}
+
+async function registrarMovimentoEstoque(request, env, user, configuracao) {
+  if (!acessoEstoquePermitido(user)) return acessoNegado();
+
+  const dados = await request.json();
+  const produtoId = Number(dados.produto_id || 0);
+  const quantidadeInformada = dados.quantidade === null || dados.quantidade === undefined
+    ? ""
+    : String(dados.quantidade).trim();
+  const quantidade = quantidadeInformada === "" ? Number.NaN : Number(dados.quantidade);
+  const dataOperacao = normalizeText(dados.data_operacao || obterDataLocalCuiaba());
+  const observacao = normalizeText(dados.observacao);
+  const chaveRecebida = normalizeText(dados.chave_idempotencia);
+  const local = await obterEstoqueCentral(env);
+
+  if (!local) return json({ error: "Estoque Central ainda não foi inicializado." }, 409);
+  if (!Number.isInteger(produtoId) || produtoId <= 0) return json({ error: "Selecione um produto válido." }, 400);
+  if (!Number.isFinite(quantidade) || quantidade < 0) return json({ error: "A quantidade não pode ser negativa." }, 400);
+  if (!configuracao.inventario && quantidade === 0) return json({ error: "A quantidade deve ser maior que zero." }, 400);
+  if (!dataOperacionalValida(dataOperacao)) return json({ error: "Data operacional inválida." }, 400);
+  if (configuracao.observacaoObrigatoria && !observacao) return json({ error: "Informe o motivo do ajuste." }, 400);
+  if (!configuracao.inventario && !chaveRecebida) return json({ error: "Chave de idempotência obrigatória." }, 400);
+  if (chaveRecebida.length > 180) return json({ error: "Chave de idempotência inválida." }, 400);
+
+  const produto = await env.DB.prepare(`
+    SELECT id, nome FROM produtos
+    WHERE id = ? AND (ativo = 1 OR ativo = 'ativo')
+  `).bind(produtoId).first();
+  if (!produto) return json({ error: "Produto ativo não encontrado." }, 404);
+
+  const chave = configuracao.inventario
+    ? `INVENTARIO_INICIAL:${local.id}:${produtoId}`
+    : `${configuracao.tipo}:${chaveRecebida}`;
+
+  const existente = await buscarOperacaoPorChave(env, chave);
+  if (existente) {
+    if (configuracao.inventario) {
+      return json({ error: "O inventário inicial deste produto já foi registrado.", operacao: existente }, 409);
+    }
+    return json({ success: true, idempotente: true, operacao: existente });
+  }
+
+  try {
+    const gravacoes = [
+      env.DB.prepare(`
+        INSERT INTO estoque_operacoes (
+          tipo, status, data_operacao, origem_tipo, origem_id,
+          chave_idempotencia, operacao_estornada_id, usuario_id, observacao, created_at
+        ) VALUES (?, 'CONFIRMADA', ?, ?, NULL, ?, NULL, ?, ?, CURRENT_TIMESTAMP)
+      `).bind(configuracao.tipo, dataOperacao, configuracao.origemTipo, chave, user.vendedorId, observacao || null),
+    ];
+    if (quantidade > 0) {
+      gravacoes.push(env.DB.prepare(`
+        INSERT INTO estoque_movimentacoes (
+          operacao_id, local_id, produto_id, carga_id, carga_item_id,
+          visita_id, visita_item_id, quantidade, efeito, created_at
+        )
+        SELECT id, ?, ?, NULL, NULL, NULL, NULL, ?, ?, CURRENT_TIMESTAMP
+        FROM estoque_operacoes WHERE chave_idempotencia = ?
+      `).bind(local.id, produtoId, quantidade, configuracao.efeito, chave));
+    }
+    await env.DB.batch(gravacoes);
+  } catch (err) {
+    const concorrente = await buscarOperacaoPorChave(env, chave);
+    if (concorrente) {
+      if (configuracao.inventario) {
+        return json({ error: "O inventário inicial deste produto já foi registrado.", operacao: concorrente }, 409);
+      }
+      return json({ success: true, idempotente: true, operacao: concorrente });
+    }
+    throw err;
+  }
+
+  const operacao = await buscarOperacaoPorChave(env, chave);
+  return json({ success: true, idempotente: false, operacao, produto, quantidade, efeito: configuracao.efeito }, 201);
+}
+
+async function registrarInventarioInicial(request, env, user) {
+  return registrarMovimentoEstoque(request, env, user, {
+    tipo: "INVENTARIO_INICIAL", origemTipo: "INVENTARIO", efeito: 1,
+    inventario: true, observacaoObrigatoria: false,
+  });
+}
+
+async function registrarEntradaEstoque(request, env, user) {
+  return registrarMovimentoEstoque(request, env, user, {
+    tipo: "ENTRADA", origemTipo: "MANUAL", efeito: 1,
+    inventario: false, observacaoObrigatoria: false,
+  });
+}
+
+async function registrarAjusteEstoque(request, env, user) {
+  if (!acessoEstoquePermitido(user)) return acessoNegado();
+  const dados = await request.clone().json();
+  const tipo = normalizeText(dados.tipo).toUpperCase();
+  if (!new Set(["AJUSTE_ENTRADA", "AJUSTE_SAIDA"]).has(tipo)) {
+    return json({ error: "Tipo de ajuste inválido." }, 400);
+  }
+  return registrarMovimentoEstoque(request, env, user, {
+    tipo, origemTipo: "AJUSTE", efeito: tipo === "AJUSTE_ENTRADA" ? 1 : -1,
+    inventario: false, observacaoObrigatoria: true,
+  });
+}
+
 async function listarVendedores(env, user) {
   if (user.role !== "admin") {
     return json({ error: "Acesso restrito ao administrador" }, 403);
@@ -1285,6 +1546,12 @@ if (url.pathname === "/api/sync" && request.method === "POST") {
     if (url.pathname.startsWith("/api/produtos/") && request.method === "PUT") {
       return await gerirProduto(request, env, user, Number(url.pathname.split("/").pop()));
     }
+    if (url.pathname === "/api/estoque/central" && request.method === "GET") return consultarEstoqueCentral(env, user);
+    if (url.pathname === "/api/estoque/central/inicializar" && request.method === "POST") return inicializarEstoqueCentral(env, user);
+    if (url.pathname === "/api/estoque/movimentacoes" && request.method === "GET") return listarMovimentacoesEstoque(request, env, user);
+    if (url.pathname === "/api/estoque/inventario-inicial" && request.method === "POST") return registrarInventarioInicial(request, env, user);
+    if (url.pathname === "/api/estoque/entradas" && request.method === "POST") return registrarEntradaEstoque(request, env, user);
+    if (url.pathname === "/api/estoque/ajustes" && request.method === "POST") return registrarAjusteEstoque(request, env, user);
     if (url.pathname === "/api/visitas" && request.method === "GET") return listarVisitas(request, env, user);
     if (url.pathname === "/api/visitas" && request.method === "POST") return criarVenda(request, env, user);
     if (url.pathname.startsWith("/api/admin/visitas/") && request.method === "PUT") {

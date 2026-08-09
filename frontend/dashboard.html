@@ -126,12 +126,12 @@
         <span class="badge">Em breve</span>
       </div>
 
-      <div class="card soon">
+      <a class="card estoque-only operacao-visible" href="estoque.html">
         <div class="icon">🧺</div>
-        <div class="title">Estoque</div>
-        <div class="desc">Matéria-prima, embalagens e produtos prontos para venda.</div>
-        <span class="badge">Em breve</span>
-      </div>
+        <div class="title">Estoque Central</div>
+        <div class="desc">Saldo, entradas, ajustes, inventário inicial e histórico.</div>
+        <span class="badge ok">Disponível</span>
+      </a>
     </div>
 
     <div class="footer">
@@ -153,6 +153,10 @@ document.getElementById("perfilUsuario").textContent = role || "vendedor";
 
 if(role !== "admin"){
   document.querySelectorAll(".admin-only").forEach(el => el.style.display = "none");
+}
+
+if(role !== "admin" && role !== "operacao"){
+  document.querySelectorAll(".estoque-only").forEach(el => el.style.display = "none");
 }
 
 if(role === "operacao"){

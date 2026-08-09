@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#e9a900">
+  <link rel="apple-touch-icon" href="images/icon-192.png">
+  <title>Gestão Vovó Maria · Estoque Central</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:#f6f1e8;color:#432818;padding:16px;min-height:100vh}
+    .wrap{max-width:1100px;margin:auto}
+    .top,.panel{background:#fff;border-radius:24px;padding:20px;box-shadow:0 12px 28px rgba(67,40,24,.09);margin-bottom:16px}
+    .brand{display:flex;align-items:center;gap:14px}.logo{width:76px;height:76px;object-fit:contain}
+    h1{font-size:25px;color:#78350f}h2{font-size:19px;color:#78350f;margin-bottom:14px}.sub{color:#9a3412;margin-top:4px}.small{font-size:12px;color:#78716c;margin:6px 7px 0}
+    .user{margin-top:13px;color:#7c2d12;font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+    button,.button{border:0;border-radius:999px;padding:12px 18px;font-weight:850;cursor:pointer;text-decoration:none;text-align:center}
+    .primary{background:#ea580c;color:#fff}.secondary{background:#fed7aa;color:#7c2d12}.dark{background:#7c2d12;color:#fff}.muted{background:#e7e5e4;color:#44403c}
+    button:disabled{opacity:.5;cursor:not-allowed}.status{padding:12px;border-radius:15px;margin-bottom:14px;background:#fef3c7;color:#92400e}.status.ok{background:#d1fae5;color:#065f46}.status.err{background:#fee2e2;color:#991b1b}
+    .table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:680px}th,td{text-align:left;padding:12px;border-bottom:1px solid #f3e3d1}th{color:#7c2d12;font-size:12px;text-transform:uppercase}.saldo{font-weight:900;font-size:17px}.negative{color:#b91c1c}.positive{color:#047857}.zero{color:#78716c}
+    .tag{display:inline-block;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:850}.tag.good{background:#d1fae5;color:#065f46}.tag.warn{background:#fef3c7;color:#92400e}.tag.bad{background:#fee2e2;color:#991b1b}
+    .filters{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:10px;margin-bottom:14px}label{display:block;font-size:12px;font-weight:800;color:#7c2d12;margin:0 0 5px 6px}input,select,textarea{width:100%;border:2px solid #fcd8af;border-radius:16px;padding:11px 13px;background:#fff;font-size:14px}textarea{min-height:90px;resize:vertical}.empty{text-align:center;padding:30px;color:#78716c}
+    .modal{position:fixed;inset:0;background:rgba(30,15,7,.55);display:none;align-items:center;justify-content:center;padding:16px;z-index:20}.modal.open{display:flex}.modal-card{background:#fff;border-radius:24px;padding:22px;width:min(520px,100%);max-height:92vh;overflow:auto}.field{margin-bottom:13px}.modal-actions{display:flex;gap:10px;margin-top:12px}.modal-actions button{flex:1}
+    @media(max-width:760px){body{padding:10px}.top,.panel{padding:16px;border-radius:20px}.brand{align-items:flex-start}.logo{width:60px;height:60px}.filters{grid-template-columns:1fr 1fr}.actions>*{flex:1 1 42%}}
+    @media(max-width:460px){.filters{grid-template-columns:1fr}.actions>*{flex-basis:100%}.modal-actions{flex-direction:column}}
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <section class="top">
+    <div class="brand">
+      <img src="images/logo-vm-gestao.png" class="logo" alt="Vovó Maria">
+      <div><h1>Centro de Estoque</h1><div class="sub">Produto acabado · Estoque Central</div></div>
+    </div>
+    <div class="user" id="userInfo"></div>
+    <div class="actions">
+      <button class="primary estoque-action" data-action="entrada">Entrada</button>
+      <button class="secondary estoque-action" data-action="ajuste">Ajuste</button>
+      <button class="dark" id="btnHistorico">Histórico</button>
+      <button class="secondary estoque-action" data-action="inventario">Inventário inicial</button>
+      <a class="button muted" href="dashboard.html">Dashboard</a>
+    </div>
+  </section>
+
+  <div id="status" class="status">Carregando Estoque Central...</div>
+
+  <section class="panel" id="inicializacao" hidden>
+    <h2>Estoque Central ainda não inicializado</h2>
+    <p>O administrador deve criar o local operacional antes do primeiro inventário.</p>
+    <div class="actions"><button id="btnInicializar" class="primary">Criar Estoque Central</button></div>
+  </section>
+
+  <section class="panel">
+    <h2>Saldo atual</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Produto</th><th>Saldo atual</th><th>Última movimentação</th><th>Situação</th><th>Inventário inicial</th></tr></thead>
+        <tbody id="saldoBody"><tr><td colspan="5" class="empty">Carregando...</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel" id="historico">
+    <h2>Histórico de movimentações</h2>
+    <div class="filters">
+      <div><label>Produto</label><select id="filtroProduto"><option value="">Todos</option></select></div>
+      <div><label>Período inicial</label><input id="filtroInicio" type="date"></div>
+      <div><label>Período final</label><input id="filtroFim" type="date"></div>
+      <div><label>Tipo</label><select id="filtroTipo"><option value="">Todos</option><option>INVENTARIO_INICIAL</option><option>ENTRADA</option><option>AJUSTE_ENTRADA</option><option>AJUSTE_SAIDA</option></select></div>
+      <div><label>Usuário</label><select id="filtroUsuario"><option value="">Todos</option></select></div>
+    </div>
+    <div class="actions"><button id="btnFiltrar" class="secondary">Aplicar filtros</button><button id="btnLimpar" class="muted">Limpar</button></div>
+    <div class="table-wrap" style="margin-top:14px">
+      <table>
+        <thead><tr><th>Data</th><th>Produto</th><th>Tipo</th><th>Movimento</th><th>Quantidade</th><th>Usuário</th><th>Observação</th></tr></thead>
+        <tbody id="historicoBody"><tr><td colspan="7" class="empty">Nenhuma movimentação.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<div class="modal" id="modalMovimento" role="dialog" aria-modal="true" aria-labelledby="modalTitulo">
+  <div class="modal-card">
+    <h2 id="modalTitulo">Movimento</h2>
+    <form id="movimentoForm">
+      <input id="acao" type="hidden">
+      <div class="field" id="campoTipoAjuste" hidden><label>Tipo de ajuste</label><select id="tipoAjuste"><option value="AJUSTE_ENTRADA">Ajuste de entrada</option><option value="AJUSTE_SAIDA">Ajuste de saída</option></select></div>
+      <div class="field"><label>Produto</label><select id="produtoId" required></select></div>
+      <div class="field"><label>Quantidade em fardos</label><input id="quantidade" type="number" min="0.001" step="0.001" required><div id="ajudaQuantidade" class="small" hidden></div></div>
+      <div class="field"><label>Data operacional</label><input id="dataOperacao" type="date" required></div>
+      <div class="field"><label id="labelObservacao">Observação opcional</label><textarea id="observacao"></textarea></div>
+      <div id="modalStatus" class="status" hidden></div>
+      <div class="modal-actions"><button type="button" class="muted" id="btnCancelar">Cancelar</button><button type="submit" class="primary" id="btnConfirmar">Confirmar</button></div>
+    </form>
+  </div>
+</div>
+
+<script>
+const API_URL="https://gestaovomaria-api.odir-bene12.workers.dev";
+const token=localStorage.getItem("token");
+const role=localStorage.getItem("vendedorRole")||"";
+const nome=localStorage.getItem("vendedorNome")||"Usuário";
+if(!token){location.href="login.html"}
+if(role!=="admin"&&role!=="operacao"){alert("Acesso não permitido para este perfil.");location.href="dashboard.html"}
+
+document.getElementById("userInfo").textContent=`${nome} · ${role==="admin"?"Administrador":"Operação"}`;
+const partesHoje=Object.fromEntries(new Intl.DateTimeFormat("en-US",{timeZone:"America/Cuiaba",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date()).filter(parte=>parte.type!=="literal").map(parte=>[parte.type,parte.value]));
+const hoje=`${partesHoje.year}-${partesHoje.month}-${partesHoje.day}`;
+document.getElementById("dataOperacao").value=hoje;
+let produtos=[];
+let usuariosHistorico=[];
+let chaveAtual="";
+
+function escapar(valor){return String(valor??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+function formatarQuantidade(valor){return Number(valor||0).toLocaleString("pt-BR",{minimumFractionDigits:0,maximumFractionDigits:3})}
+function formatarData(valor){if(!valor)return"Sem movimentação";const data=String(valor).slice(0,10).split("-");return data.length===3?`${data[2]}/${data[1]}/${data[0]}`:valor}
+function novaChave(){return crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(16).slice(2)}`}
+function setStatus(msg,tipo=""){const el=document.getElementById("status");el.textContent=msg;el.className=`status ${tipo}`}
+function setModalStatus(msg,tipo="err"){const el=document.getElementById("modalStatus");el.hidden=!msg;el.textContent=msg;el.className=`status ${tipo}`}
+
+async function api(path,opcoes={}){
+  const resposta=await fetch(API_URL+path,{...opcoes,headers:{"Content-Type":"application/json",Authorization:`Bearer ${token}`,...opcoes.headers}});
+  const dados=await resposta.json().catch(()=>({}));
+  if(resposta.status===401){localStorage.removeItem("token");location.href="login.html";throw new Error("Sessão expirada.")}
+  if(!resposta.ok)throw new Error(dados.error||"Não foi possível concluir a operação.");
+  return dados;
+}
+
+function renderizarSaldo(){
+  const body=document.getElementById("saldoBody");
+  if(!produtos.length){body.innerHTML='<tr><td colspan="5" class="empty">Nenhum produto ativo.</td></tr>';return}
+  body.innerHTML=produtos.map(p=>{
+    const classe=p.saldo_atual<0?"negative":p.saldo_atual>0?"positive":"zero";
+    const tag=p.situacao==="DIVERGENCIA"?"bad":p.situacao==="DISPONIVEL"?"good":"warn";
+    const situacao=p.situacao==="DIVERGENCIA"?"Divergência":p.situacao==="DISPONIVEL"?"Disponível":"Zerado";
+    return `<tr><td><strong>${escapar(p.produto_nome)}</strong></td><td class="saldo ${classe}">${formatarQuantidade(p.saldo_atual)}</td><td>${escapar(formatarData(p.ultima_movimentacao))}</td><td><span class="tag ${tag}">${situacao}</span></td><td>${p.inventario_inicial_registrado?'<span class="tag good">Registrado</span>':'<span class="tag warn">Pendente</span>'}</td></tr>`
+  }).join("");
+}
+
+function preencherProdutos(){
+  const opcoes=produtos.map(p=>`<option value="${Number(p.produto_id)}">${escapar(p.produto_nome)}</option>`).join("");
+  document.getElementById("produtoId").innerHTML='<option value="">Selecione</option>'+opcoes;
+  document.getElementById("filtroProduto").innerHTML='<option value="">Todos</option>'+opcoes;
+}
+
+async function carregarEstoque(){
+  try{
+    const dados=await api("/api/estoque/central");
+    const semLocal=!!dados.inicializacao_necessaria;
+    document.getElementById("inicializacao").hidden=!semLocal;
+    document.getElementById("btnInicializar").hidden=role!=="admin";
+    document.querySelectorAll(".estoque-action").forEach(b=>b.disabled=semLocal);
+    produtos=dados.produtos||[];
+    renderizarSaldo();preencherProdutos();
+    setStatus(semLocal?(role==="admin"?"Crie o Estoque Central para começar.":"Aguarde o administrador inicializar o Estoque Central."):"Estoque Central carregado.",semLocal?"":"ok");
+  }catch(error){setStatus(error.message,"err")}
+}
+
+function abrirModal(acao){
+  document.getElementById("movimentoForm").reset();
+  document.getElementById("acao").value=acao;
+  document.getElementById("dataOperacao").value=hoje;
+  document.getElementById("campoTipoAjuste").hidden=acao!=="ajuste";
+  document.getElementById("modalTitulo").textContent=acao==="entrada"?"Entrada de produto acabado":acao==="ajuste"?"Ajuste de estoque":"Inventário inicial";
+  document.getElementById("labelObservacao").textContent=acao==="ajuste"?"Motivo do ajuste (obrigatório)":"Observação opcional";
+  document.getElementById("observacao").required=acao==="ajuste";
+  const campoQuantidade=document.getElementById("quantidade");
+  const ajudaQuantidade=document.getElementById("ajudaQuantidade");
+  campoQuantidade.min=acao==="inventario"?"0":"0.001";
+  ajudaQuantidade.hidden=acao!=="inventario";
+  ajudaQuantidade.textContent=acao==="inventario"?"Informe 0 quando o produto foi contado fisicamente e não há unidades em estoque.":"";
+  document.querySelectorAll("#produtoId option").forEach(option=>{const p=produtos.find(item=>String(item.produto_id)===option.value);option.disabled=acao==="inventario"&&!!p?.inventario_inicial_registrado});
+  chaveAtual=novaChave();setModalStatus("");document.getElementById("modalMovimento").classList.add("open");
+}
+function fecharModal(){document.getElementById("modalMovimento").classList.remove("open")}
+
+async function salvarMovimento(event){
+  event.preventDefault();
+  const acao=document.getElementById("acao").value;
+  const body={produto_id:Number(document.getElementById("produtoId").value),quantidade:Number(document.getElementById("quantidade").value),data_operacao:document.getElementById("dataOperacao").value,observacao:document.getElementById("observacao").value.trim(),chave_idempotencia:chaveAtual};
+  let rota="/api/estoque/entradas";
+  if(acao==="inventario")rota="/api/estoque/inventario-inicial";
+  if(acao==="ajuste"){rota="/api/estoque/ajustes";body.tipo=document.getElementById("tipoAjuste").value}
+  const botao=document.getElementById("btnConfirmar");
+  try{botao.disabled=true;setModalStatus("Registrando...","");await api(rota,{method:"POST",body:JSON.stringify(body)});fecharModal();await Promise.all([carregarEstoque(),carregarHistorico()]);setStatus("Movimentação registrada com sucesso.","ok")}
+  catch(error){setModalStatus(error.message,"err")}
+  finally{botao.disabled=false}
+}
+
+function parametrosHistorico(){const p=new URLSearchParams();[["produto_id","filtroProduto"],["data_inicial","filtroInicio"],["data_final","filtroFim"],["tipo","filtroTipo"],["usuario_id","filtroUsuario"]].forEach(([nome,id])=>{const valor=document.getElementById(id).value;if(valor)p.set(nome,valor)});return p.toString()}
+async function carregarHistorico(){
+  try{
+    const dados=await api(`/api/estoque/movimentacoes?${parametrosHistorico()}`);const lista=dados.movimentacoes||[];
+    if(!usuariosHistorico.length){usuariosHistorico=[...new Map(lista.filter(m=>m.usuario_id).map(m=>[String(m.usuario_id),m.usuario_nome||`Usuário ${m.usuario_id}`])).entries()];document.getElementById("filtroUsuario").innerHTML='<option value="">Todos</option>'+usuariosHistorico.map(([id,nome])=>`<option value="${id}">${escapar(nome)}</option>`).join("")}
+    const body=document.getElementById("historicoBody");
+    if(!lista.length){body.innerHTML='<tr><td colspan="7" class="empty">Nenhuma movimentação encontrada.</td></tr>';return}
+    body.innerHTML=lista.map(m=>`<tr><td>${escapar(formatarData(m.data_operacao))}</td><td>${escapar(m.produto_nome)}</td><td>${escapar(m.tipo)}</td><td><span class="tag ${Number(m.efeito)===1?'good':'bad'}">${Number(m.efeito)===1?'Entrada':'Saída'}</span></td><td>${formatarQuantidade(m.quantidade)}</td><td>${escapar(m.usuario_nome||`Usuário ${m.usuario_id||'-'}`)}</td><td>${escapar(m.observacao||"")}</td></tr>`).join("")
+  }catch(error){setStatus(error.message,"err")}
+}
+
+document.querySelectorAll(".estoque-action").forEach(botao=>botao.addEventListener("click",()=>abrirModal(botao.dataset.action)));
+document.getElementById("btnCancelar").onclick=fecharModal;
+document.getElementById("modalMovimento").addEventListener("click",event=>{if(event.target.id==="modalMovimento")fecharModal()});
+document.getElementById("movimentoForm").addEventListener("submit",salvarMovimento);
+document.getElementById("btnHistorico").onclick=()=>document.getElementById("historico").scrollIntoView({behavior:"smooth"});
+document.getElementById("btnFiltrar").onclick=carregarHistorico;
+document.getElementById("btnLimpar").onclick=()=>{["filtroProduto","filtroInicio","filtroFim","filtroTipo","filtroUsuario"].forEach(id=>document.getElementById(id).value="");carregarHistorico()};
+document.getElementById("btnInicializar").onclick=async()=>{if(!confirm("Criar o local único ESTOQUE CENTRAL?"))return;try{await api("/api/estoque/central/inicializar",{method:"POST",body:"{}"});await carregarEstoque();setStatus("Estoque Central inicializado. Faça a contagem física antes de registrar o inventário.","ok")}catch(error){setStatus(error.message,"err")}};
+
+Promise.all([carregarEstoque(),carregarHistorico()]);
+</script>
+</body>
+</html>
