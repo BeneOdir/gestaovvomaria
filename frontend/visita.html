@@ -82,6 +82,10 @@
       border-color:#F97316;
       box-shadow:0 0 0 3px rgba(249,115,22,.12)
     }
+    .canal-options{display:flex;gap:18px;flex-wrap:wrap;padding:6px 7px}
+    .canal-options label{display:flex;align-items:center;gap:7px;margin:0}
+    .canal-options input{width:auto;padding:0}
+    .canal-readonly{padding:8px 7px;font-weight:800;color:#78350F}
     .btn{
       width:100%;
       border:0;
@@ -448,6 +452,15 @@
       </div>
     </div>
 
+    <div class="group" id="grupoCanalVenda">
+      <label>Canal da venda</label>
+      <div id="canalVendaAdmin" class="canal-options" hidden>
+        <label><input type="radio" name="canal_venda" value="LOJA_FABRICA" checked> Loja/Fábrica</label>
+        <label><input type="radio" name="canal_venda" value="ROTA"> Rota</label>
+      </div>
+      <div id="canalVendaLeitura" class="canal-readonly" hidden></div>
+    </div>
+
     <div class="group">
       <label>Observação rápida</label>
       <input id="observacoes" placeholder="Ex.: pediu retorno, sem espaço, comprou pouco...">
@@ -519,6 +532,20 @@ if(vendedorRole === "operacao"){
   document.getElementById("navRelatorio").hidden = true;
   document.getElementById("tituloVenda").textContent = "Registrar venda";
   document.getElementById("subtituloVenda").textContent = "Atendimento operacional na fábrica";
+}
+
+const canalVendaPorRole = vendedorRole === "vendedor" ? "ROTA" : "LOJA_FABRICA";
+if(vendedorRole === "admin"){
+  document.getElementById("canalVendaAdmin").hidden = false;
+}else{
+  const canalLeitura = document.getElementById("canalVendaLeitura");
+  canalLeitura.hidden = false;
+  canalLeitura.textContent = canalVendaPorRole === "ROTA" ? "Rota" : "Loja/Fábrica";
+}
+
+function obterCanalVenda(){
+  if(vendedorRole !== "admin") return canalVendaPorRole;
+  return document.querySelector('input[name="canal_venda"]:checked')?.value || "LOJA_FABRICA";
 }
 
 document.getElementById("userInfo").textContent = "Logado como: " + vendedorNome;
@@ -1377,6 +1404,7 @@ document.getElementById("visitaForm").addEventListener("submit", async event => 
     cliente_id: clienteSelecionado?.tipo_origem === "avulso" ? 0 : Number(clienteSelecionado?.id || clienteId.replace(/^cliente:/, "")),
     cliente_avulso_id: clienteSelecionado?.tipo_origem === "avulso" ? clienteSelecionado.id : null,
     data_visita: document.getElementById("data_visita").value,
+    canal_venda: obterCanalVenda(),
     comprou,
     observacoes: document.getElementById("observacoes").value.trim(),
     pagamentos,

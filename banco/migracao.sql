@@ -48,3 +48,4 @@ CREATE INDEX IF NOT EXISTS idx_visitas_data ON visitas(data_visita);
 CREATE INDEX IF NOT EXISTS idx_visitas_cliente ON visitas(cliente_id);
 CREATE INDEX IF NOT EXISTS idx_visitas_vendedor ON visitas(vendedor_id);
 CREATE INDEX IF NOT EXISTS idx_visita_itens_visita ON visita_itens(visita_id);
+npx wrangler d1 execute gestaovovomaria-db --remote --file=banco/migracao_pagamentos_combinados.sql

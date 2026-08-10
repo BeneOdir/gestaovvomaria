@@ -119,17 +119,24 @@
         <span class="badge">Em breve</span>
       </div>
 
-      <div class="card soon">
+      <a class="card producao-only operacao-visible" href="producao.html">
         <div class="icon">🏭</div>
         <div class="title">Produção</div>
-        <div class="desc">Receitas produzidas, previsão de produção e produto acabado.</div>
-        <span class="badge">Em breve</span>
-      </div>
+        <div class="desc">Registrar lotes por Receita Base, com fardos, pacotes e remuneração.</div>
+        <span class="badge ok">Disponível</span>
+      </a>
 
       <a class="card estoque-only operacao-visible" href="estoque.html">
         <div class="icon">🧺</div>
         <div class="title">Estoque Central</div>
         <div class="desc">Saldo, entradas, ajustes, inventário inicial e histórico.</div>
+        <span class="badge ok">Disponível</span>
+      </a>
+
+      <a class="card carga-only operacao-visible" href="cargas.html">
+        <div class="icon">🚛</div>
+        <div class="title">Carga do Vendedor</div>
+        <div class="desc">Separar, conferir e transferir a carga diária do vendedor.</div>
         <span class="badge ok">Disponível</span>
       </a>
     </div>
@@ -157,6 +164,8 @@ if(role !== "admin"){
 
 if(role !== "admin" && role !== "operacao"){
   document.querySelectorAll(".estoque-only").forEach(el => el.style.display = "none");
+  document.querySelectorAll(".producao-only").forEach(el => el.style.display = "none");
+  document.querySelectorAll(".carga-only").forEach(el => el.style.display = "none");
 }
 
 if(role === "operacao"){

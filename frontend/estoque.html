@@ -55,7 +55,7 @@
     <h2>Saldo atual</h2>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Produto</th><th>Saldo atual</th><th>Última movimentação</th><th>Situação</th><th>Inventário inicial</th></tr></thead>
+        <thead><tr><th>Produto</th><th>Saldo atual (fardos)</th><th>Última movimentação</th><th>Situação</th><th>Inventário inicial</th></tr></thead>
         <tbody id="saldoBody"><tr><td colspan="5" class="empty">Carregando...</td></tr></tbody>
       </table>
     </div>
@@ -67,14 +67,14 @@
       <div><label>Produto</label><select id="filtroProduto"><option value="">Todos</option></select></div>
       <div><label>Período inicial</label><input id="filtroInicio" type="date"></div>
       <div><label>Período final</label><input id="filtroFim" type="date"></div>
-      <div><label>Tipo</label><select id="filtroTipo"><option value="">Todos</option><option>INVENTARIO_INICIAL</option><option>ENTRADA</option><option>AJUSTE_ENTRADA</option><option>AJUSTE_SAIDA</option></select></div>
+      <div><label>Tipo</label><select id="filtroTipo"><option value="">Todos</option><option>INVENTARIO_INICIAL</option><option>ENTRADA</option><option>ENTRADA_PRODUCAO</option><option>TRANSFERENCIA_CARGA</option><option>ESTORNO</option><option>AJUSTE_ENTRADA</option><option>AJUSTE_SAIDA</option></select></div>
       <div><label>Usuário</label><select id="filtroUsuario"><option value="">Todos</option></select></div>
     </div>
     <div class="actions"><button id="btnFiltrar" class="secondary">Aplicar filtros</button><button id="btnLimpar" class="muted">Limpar</button></div>
     <div class="table-wrap" style="margin-top:14px">
       <table>
-        <thead><tr><th>Data</th><th>Produto</th><th>Tipo</th><th>Movimento</th><th>Quantidade</th><th>Usuário</th><th>Observação</th></tr></thead>
-        <tbody id="historicoBody"><tr><td colspan="7" class="empty">Nenhuma movimentação.</td></tr></tbody>
+        <thead><tr><th>Data</th><th>Produto</th><th>Tipo</th><th>Origem</th><th>Movimento</th><th>Quantidade (fardos)</th><th>Usuário</th><th>Observação</th></tr></thead>
+        <tbody id="historicoBody"><tr><td colspan="8" class="empty">Nenhuma movimentação.</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -189,13 +189,14 @@ async function salvarMovimento(event){
 }
 
 function parametrosHistorico(){const p=new URLSearchParams();[["produto_id","filtroProduto"],["data_inicial","filtroInicio"],["data_final","filtroFim"],["tipo","filtroTipo"],["usuario_id","filtroUsuario"]].forEach(([nome,id])=>{const valor=document.getElementById(id).value;if(valor)p.set(nome,valor)});return p.toString()}
+function formatarOrigem(m){if(m.origem_tipo==="PRODUCAO"&&m.origem_id)return`Produção #${Number(m.origem_id)}`;if(m.origem_tipo==="CARGA"&&m.origem_id)return`Carga #${Number(m.origem_id)}`;return m.origem_tipo||"-"}
 async function carregarHistorico(){
   try{
     const dados=await api(`/api/estoque/movimentacoes?${parametrosHistorico()}`);const lista=dados.movimentacoes||[];
     if(!usuariosHistorico.length){usuariosHistorico=[...new Map(lista.filter(m=>m.usuario_id).map(m=>[String(m.usuario_id),m.usuario_nome||`Usuário ${m.usuario_id}`])).entries()];document.getElementById("filtroUsuario").innerHTML='<option value="">Todos</option>'+usuariosHistorico.map(([id,nome])=>`<option value="${id}">${escapar(nome)}</option>`).join("")}
     const body=document.getElementById("historicoBody");
-    if(!lista.length){body.innerHTML='<tr><td colspan="7" class="empty">Nenhuma movimentação encontrada.</td></tr>';return}
-    body.innerHTML=lista.map(m=>`<tr><td>${escapar(formatarData(m.data_operacao))}</td><td>${escapar(m.produto_nome)}</td><td>${escapar(m.tipo)}</td><td><span class="tag ${Number(m.efeito)===1?'good':'bad'}">${Number(m.efeito)===1?'Entrada':'Saída'}</span></td><td>${formatarQuantidade(m.quantidade)}</td><td>${escapar(m.usuario_nome||`Usuário ${m.usuario_id||'-'}`)}</td><td>${escapar(m.observacao||"")}</td></tr>`).join("")
+    if(!lista.length){body.innerHTML='<tr><td colspan="8" class="empty">Nenhuma movimentação encontrada.</td></tr>';return}
+    body.innerHTML=lista.map(m=>`<tr><td>${escapar(formatarData(m.data_operacao))}</td><td>${escapar(m.produto_nome)}</td><td>${escapar(m.tipo)}</td><td>${escapar(formatarOrigem(m))}</td><td><span class="tag ${Number(m.efeito)===1?'good':'bad'}">${Number(m.efeito)===1?'Entrada':'Saída'}</span></td><td>${formatarQuantidade(m.quantidade)}</td><td>${escapar(m.usuario_nome||`Usuário ${m.usuario_id||'-'}`)}</td><td>${escapar(m.observacao||"")}</td></tr>`).join("")
   }catch(error){setStatus(error.message,"err")}
 }
 

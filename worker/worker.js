@@ -1375,6 +1375,836 @@ async function listarRegistrosProducao(request, env, user) {
   return json(resultado.results || []);
 }
 
+function chaveLoteProducao(chaveCliente) {
+  return `LOTE_PRODUCAO:${chaveCliente}`;
+}
+
+function chaveItemLoteProducao(chaveCliente, produtoId) {
+  return `LOTE_PRODUCAO:${chaveCliente}:PRODUTO:${produtoId}`;
+}
+
+async function listarReceitasBaseProducao(env, user) {
+  if (!acessoProducaoPermitido(user)) return acessoNegado();
+
+  const resultado = await env.DB.prepare(`
+    SELECT id, nome, versao, ativo, created_at, updated_at
+    FROM producao_receitas_base
+    WHERE ativo = 1
+    ORDER BY nome, versao DESC
+  `).all();
+
+  return json(resultado.results || []);
+}
+
+async function buscarLoteProducaoPorChave(env, chave) {
+  return env.DB.prepare(`
+    SELECT
+      lote.id, lote.receita_base_id, receita.nome AS receita_base_nome,
+      receita.versao AS receita_base_versao,
+      lote.quantidade_receitas_base, lote.data_producao,
+      lote.usuario_id, usuario.nome AS usuario_nome,
+      lote.observacao, lote.chave_idempotencia, lote.created_at,
+      lote.fluxo, lote.status, lote.encerrado_em, lote.encerrado_por,
+      lote.chave_encerramento, lote.motivo_encerramento
+    FROM producao_lotes lote
+    INNER JOIN producao_receitas_base receita ON receita.id = lote.receita_base_id
+    LEFT JOIN vendedores usuario ON usuario.id = lote.usuario_id
+    WHERE lote.chave_idempotencia = ?
+  `).bind(chave).first();
+}
+
+async function buscarLoteProducaoPorId(env, loteId) {
+  return env.DB.prepare(`
+    SELECT
+      lote.id, lote.receita_base_id, receita.nome AS receita_base_nome,
+      receita.versao AS receita_base_versao,
+      lote.quantidade_receitas_base, lote.data_producao,
+      lote.usuario_id, usuario.nome AS usuario_nome,
+      lote.observacao, lote.chave_idempotencia, lote.created_at,
+      lote.fluxo, lote.status, lote.encerrado_em, lote.encerrado_por,
+      lote.chave_encerramento, lote.motivo_encerramento
+    FROM producao_lotes lote
+    INNER JOIN producao_receitas_base receita ON receita.id = lote.receita_base_id
+    LEFT JOIN vendedores usuario ON usuario.id = lote.usuario_id
+    WHERE lote.id = ?
+  `).bind(loteId).first();
+}
+
+async function carregarItensLoteProducao(env, loteId) {
+  const resultado = await env.DB.prepare(`
+    SELECT
+      registro.id, registro.lote_id, registro.produto_id,
+      produto.nome AS produto_nome,
+      registro.usuario_id, usuario.nome AS usuario_nome,
+      registro.data_producao,
+      registro.quantidade_fardos,
+      registro.pacotes_por_fardo_snapshot,
+      registro.quantidade_pacotes,
+      registro.valor_por_pacote_snapshot,
+      registro.valor_producao,
+      registro.observacao,
+      registro.chave_idempotencia,
+      registro.created_at,
+      (
+        SELECT COUNT(*)
+        FROM estoque_operacoes operacao_contagem
+        WHERE operacao_contagem.tipo = 'ENTRADA_PRODUCAO'
+          AND operacao_contagem.origem_tipo = 'PRODUCAO'
+          AND operacao_contagem.origem_id = registro.id
+      ) AS total_operacoes_estoque,
+      (
+        SELECT operacao.id
+        FROM estoque_operacoes operacao
+        WHERE operacao.tipo = 'ENTRADA_PRODUCAO'
+          AND operacao.origem_tipo = 'PRODUCAO'
+          AND operacao.origem_id = registro.id
+          AND operacao.chave_idempotencia =
+            'PRODUCAO:' || CAST(registro.id AS TEXT)
+        LIMIT 1
+      ) AS operacao_estoque_id,
+      (
+        SELECT COUNT(*)
+        FROM estoque_movimentacoes movimento_contagem
+        INNER JOIN estoque_operacoes operacao_contagem
+          ON operacao_contagem.id = movimento_contagem.operacao_id
+        WHERE operacao_contagem.tipo = 'ENTRADA_PRODUCAO'
+          AND operacao_contagem.origem_tipo = 'PRODUCAO'
+          AND operacao_contagem.origem_id = registro.id
+      ) AS total_movimentacoes_estoque,
+      (
+        SELECT movimento.id
+        FROM estoque_movimentacoes movimento
+        INNER JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id
+        WHERE operacao.tipo = 'ENTRADA_PRODUCAO'
+          AND operacao.origem_tipo = 'PRODUCAO'
+          AND operacao.origem_id = registro.id
+          AND operacao.chave_idempotencia =
+            'PRODUCAO:' || CAST(registro.id AS TEXT)
+        LIMIT 1
+      ) AS movimentacao_estoque_id,
+      (
+        SELECT movimento.local_id
+        FROM estoque_movimentacoes movimento
+        INNER JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id
+        WHERE operacao.origem_tipo = 'PRODUCAO'
+          AND operacao.origem_id = registro.id
+        LIMIT 1
+      ) AS estoque_local_id,
+      (
+        SELECT movimento.produto_id
+        FROM estoque_movimentacoes movimento
+        INNER JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id
+        WHERE operacao.origem_tipo = 'PRODUCAO'
+          AND operacao.origem_id = registro.id
+        LIMIT 1
+      ) AS estoque_produto_id,
+      (
+        SELECT movimento.quantidade
+        FROM estoque_movimentacoes movimento
+        INNER JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id
+        WHERE operacao.origem_tipo = 'PRODUCAO'
+          AND operacao.origem_id = registro.id
+        LIMIT 1
+      ) AS estoque_quantidade,
+      (
+        SELECT movimento.efeito
+        FROM estoque_movimentacoes movimento
+        INNER JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id
+        WHERE operacao.origem_tipo = 'PRODUCAO'
+          AND operacao.origem_id = registro.id
+        LIMIT 1
+      ) AS estoque_efeito
+    FROM producao_registros registro
+    INNER JOIN produtos produto ON produto.id = registro.produto_id
+    LEFT JOIN vendedores usuario ON usuario.id = registro.usuario_id
+    WHERE registro.lote_id = ?
+    ORDER BY registro.id
+  `).bind(loteId).all();
+
+  return resultado.results || [];
+}
+
+async function carregarLoteProducaoCompleto(env, identificador, porChave = false) {
+  const lote = porChave
+    ? await buscarLoteProducaoPorChave(env, identificador)
+    : await buscarLoteProducaoPorId(env, identificador);
+  if (!lote) return null;
+  const itens = await carregarItensLoteProducao(env, lote.id);
+  const vinculados = await env.DB.prepare(`
+    SELECT vinculo.id, vinculo.lote_id, vinculo.produto_id,
+      produto.nome AS produto_nome,
+      vinculo.pacotes_por_fardo_snapshot,
+      vinculo.valor_por_pacote_snapshot,
+      vinculo.incluido_por, usuario.nome AS incluido_por_nome,
+      vinculo.observacao, vinculo.chave_idempotencia, vinculo.created_at
+    FROM producao_lote_produtos vinculo
+    INNER JOIN produtos produto ON produto.id = vinculo.produto_id
+    LEFT JOIN vendedores usuario ON usuario.id = vinculo.incluido_por
+    WHERE vinculo.lote_id = ?
+    ORDER BY vinculo.created_at, vinculo.id
+  `).bind(lote.id).all();
+  return { ...lote, itens, produtos_vinculados: vinculados.results || [] };
+}
+
+function compararNumeroProducao(a, b) {
+  return Math.abs(Number(a) - Number(b)) < 0.00001;
+}
+
+function validarLoteExistenteContraPayload(lote, esperado, localId) {
+  if (
+    Number(lote.receita_base_id) !== esperado.receitaBaseId
+    || !compararNumeroProducao(lote.quantidade_receitas_base, esperado.quantidadeReceitasBase)
+    || lote.data_producao !== esperado.dataProducao
+    || Number(lote.usuario_id) !== esperado.usuarioId
+    || normalizeText(lote.observacao) !== esperado.observacao
+  ) {
+    return { tipo: "DIVERGENTE", mensagem: "A chave de idempotência já foi utilizada com dados diferentes." };
+  }
+
+  if (lote.itens.length !== esperado.itens.length) {
+    return { tipo: "INCOMPLETO", mensagem: "O lote existente possui quantidade inesperada de itens." };
+  }
+
+  const itensPorProduto = new Map(lote.itens.map(item => [Number(item.produto_id), item]));
+  for (const itemEsperado of esperado.itens) {
+    const item = itensPorProduto.get(itemEsperado.produtoId);
+    if (!item || Number(item.quantidade_fardos) !== itemEsperado.quantidadeFardos) {
+      return item
+        ? { tipo: "DIVERGENTE", mensagem: "O lote existente possui quantidade de fardos diferente." }
+        : { tipo: "INCOMPLETO", mensagem: "O lote existente não possui todos os produtos esperados." };
+    }
+
+    const calculoIntegro = Number(item.quantidade_pacotes)
+      === Number(item.quantidade_fardos) * Number(item.pacotes_por_fardo_snapshot)
+      && compararNumeroProducao(
+        item.valor_producao,
+        arredondarMoeda(Number(item.quantidade_pacotes) * Number(item.valor_por_pacote_snapshot))
+      );
+    const estoqueIntegro = Number(item.total_operacoes_estoque) === 1
+      && Number(item.total_movimentacoes_estoque) === 1
+      && Number(item.operacao_estoque_id) > 0
+      && Number(item.movimentacao_estoque_id) > 0
+      && Number(item.estoque_local_id) === Number(localId)
+      && Number(item.estoque_produto_id) === itemEsperado.produtoId
+      && compararNumeroProducao(item.estoque_quantidade, item.quantidade_fardos)
+      && Number(item.estoque_efeito) === 1;
+    if (!calculoIntegro || !estoqueIntegro) {
+      return { tipo: "INCOMPLETO", mensagem: "O lote existente possui Produção ou Estoque incompleto." };
+    }
+  }
+
+  return null;
+}
+
+function respostaConflitoLote(validacao, lote) {
+  return json({
+    error: validacao.tipo === "INCOMPLETO"
+      ? "O lote já existe, mas sua estrutura de Produção ou Estoque está incompleta. Solicite auditoria."
+      : validacao.mensagem,
+    detalhe: validacao.mensagem,
+    lote_id: lote.id,
+  }, 409);
+}
+
+async function registrarLoteProducao(request, env, user) {
+  if (!acessoProducaoPermitido(user)) return acessoNegado();
+
+  const dados = await request.json();
+  const receitaBaseId = Number(dados.receita_base_id || 0);
+  const quantidadeInformada = dados.quantidade_receitas_base === null
+    || dados.quantidade_receitas_base === undefined
+    ? ""
+    : String(dados.quantidade_receitas_base).trim();
+  const quantidadeReceitasBase = quantidadeInformada === ""
+    ? Number.NaN
+    : Number(dados.quantidade_receitas_base);
+  const dataProducao = normalizeText(dados.data_producao || obterDataLocalCuiaba());
+  const observacao = normalizeText(dados.observacao);
+  const chaveCliente = normalizeText(dados.chave_idempotencia);
+  const itensRecebidos = Array.isArray(dados.itens) ? dados.itens : [];
+
+  if (!Number.isInteger(receitaBaseId) || receitaBaseId <= 0) return json({ error: "Receita Base inválida." }, 400);
+  if (!Number.isFinite(quantidadeReceitasBase) || quantidadeReceitasBase <= 0) {
+    return json({ error: "A quantidade de Receitas Base deve ser maior que zero." }, 400);
+  }
+  if (!dataOperacionalValida(dataProducao)) return json({ error: "Data da Produção inválida." }, 400);
+  if (!chaveCliente || chaveCliente.length > 120) return json({ error: "Chave de idempotência inválida." }, 400);
+  if (!itensRecebidos.length) return json({ error: "Adicione ao menos um produto ao lote." }, 400);
+
+  const itens = itensRecebidos.map(item => ({
+    produtoId: Number(item?.produto_id || 0),
+    quantidadeFardos: Number(item?.quantidade_fardos),
+  }));
+  if (itens.some(item => !Number.isInteger(item.produtoId) || item.produtoId <= 0)) {
+    return json({ error: "Todos os itens devem possuir produto válido." }, 400);
+  }
+  if (itens.some(item => !Number.isInteger(item.quantidadeFardos) || item.quantidadeFardos <= 0)) {
+    return json({ error: "A quantidade de fardos de cada produto deve ser um inteiro maior que zero." }, 400);
+  }
+  if (new Set(itens.map(item => item.produtoId)).size !== itens.length) {
+    return json({ error: "O mesmo produto não pode aparecer duas vezes no lote." }, 400);
+  }
+
+  const local = await obterEstoqueCentral(env);
+  if (!local) return json({ error: "Estoque Central ainda não foi inicializado." }, 409);
+
+  const chaveLote = chaveLoteProducao(chaveCliente);
+  const esperado = {
+    receitaBaseId,
+    quantidadeReceitasBase,
+    dataProducao,
+    usuarioId: Number(user.vendedorId),
+    observacao,
+    itens,
+  };
+  const existente = await carregarLoteProducaoCompleto(env, chaveLote, true);
+  if (existente) {
+    const validacao = validarLoteExistenteContraPayload(existente, esperado, local.id);
+    if (validacao) return respostaConflitoLote(validacao, existente);
+    return json({ success: true, idempotente: true, lote: existente });
+  }
+
+  const receita = await env.DB.prepare(`
+    SELECT id, nome, versao
+    FROM producao_receitas_base
+    WHERE id = ? AND ativo = 1
+  `).bind(receitaBaseId).first();
+  if (!receita) return json({ error: "Receita Base ativa não encontrada." }, 409);
+
+  const parametros = await Promise.all(itens.map(item => env.DB.prepare(`
+    SELECT produto.id, produto.nome,
+      parametro.pacotes_por_fardo, parametro.valor_por_pacote
+    FROM produtos produto
+    INNER JOIN producao_parametros_produto parametro
+      ON parametro.produto_id = produto.id AND parametro.ativo = 1
+    WHERE produto.id = ? AND produto.ativo = 'ativo'
+  `).bind(item.produtoId).first()));
+  if (parametros.some(parametro => !parametro)) {
+    return json({ error: "Todos os produtos devem estar ativos e possuir parâmetros de Produção ativos." }, 409);
+  }
+  if (parametros.some(parametro =>
+    !Number.isInteger(Number(parametro.pacotes_por_fardo))
+    || Number(parametro.pacotes_por_fardo) <= 0
+    || !Number.isFinite(Number(parametro.valor_por_pacote))
+    || Number(parametro.valor_por_pacote) < 0
+  )) {
+    return json({ error: "Existem parâmetros de Produção inválidos no lote." }, 409);
+  }
+
+  const statements = [
+    env.DB.prepare(`
+      INSERT INTO producao_lotes (
+        receita_base_id, quantidade_receitas_base, data_producao,
+        usuario_id, observacao, chave_idempotencia, created_at
+      )
+      SELECT receita.id, ?, ?, usuario.id, ?, ?, CURRENT_TIMESTAMP
+      FROM producao_receitas_base receita
+      INNER JOIN vendedores usuario ON usuario.id = ?
+      WHERE receita.id = ? AND receita.ativo = 1
+        AND usuario.status = 'ativo'
+        AND usuario.role IN ('admin', 'operacao')
+    `).bind(
+      quantidadeReceitasBase, dataProducao, observacao || null,
+      chaveLote, user.vendedorId, receitaBaseId
+    ),
+  ];
+
+  for (const item of itens) {
+    const chaveItem = chaveItemLoteProducao(chaveCliente, item.produtoId);
+    statements.push(
+      env.DB.prepare(`
+        INSERT INTO producao_registros (
+          lote_id, produto_id, usuario_id, data_producao,
+          quantidade_fardos, pacotes_por_fardo_snapshot,
+          quantidade_pacotes, valor_por_pacote_snapshot,
+          valor_producao, observacao, chave_idempotencia, created_at
+        )
+        SELECT
+          lote.id, produto.id, lote.usuario_id, lote.data_producao,
+          ?, parametro.pacotes_por_fardo,
+          ? * parametro.pacotes_por_fardo,
+          parametro.valor_por_pacote,
+          ROUND(? * parametro.pacotes_por_fardo * parametro.valor_por_pacote, 2),
+          lote.observacao, ?, CURRENT_TIMESTAMP
+        FROM producao_lotes lote
+        INNER JOIN produtos produto
+          ON produto.id = ? AND produto.ativo = 'ativo'
+        INNER JOIN producao_parametros_produto parametro
+          ON parametro.produto_id = produto.id AND parametro.ativo = 1
+        WHERE lote.chave_idempotencia = ?
+      `).bind(
+        item.quantidadeFardos, item.quantidadeFardos, item.quantidadeFardos,
+        chaveItem, item.produtoId, chaveLote
+      ),
+      env.DB.prepare(`
+        INSERT INTO estoque_operacoes (
+          tipo, status, data_operacao, origem_tipo, origem_id,
+          chave_idempotencia, operacao_estornada_id, usuario_id,
+          observacao, created_at
+        )
+        SELECT
+          'ENTRADA_PRODUCAO', 'CONFIRMADA',
+          COALESCE((SELECT data_producao FROM producao_registros WHERE id = alvo.registro_id), ''),
+          'PRODUCAO', alvo.registro_id,
+          'PRODUCAO:' || CAST(alvo.registro_id AS TEXT), NULL,
+          COALESCE((SELECT usuario_id FROM producao_registros WHERE id = alvo.registro_id), 0),
+          'Entrada automática da Produção #' || CAST(alvo.registro_id AS TEXT),
+          CURRENT_TIMESTAMP
+        FROM (
+          SELECT COALESCE((
+            SELECT id FROM producao_registros WHERE chave_idempotencia = ?
+          ), 0) AS registro_id
+        ) alvo
+      `).bind(chaveItem),
+      env.DB.prepare(`
+        INSERT INTO estoque_movimentacoes (
+          operacao_id, local_id, produto_id, carga_id, carga_item_id,
+          visita_id, visita_item_id, quantidade, efeito, created_at
+        ) VALUES (
+          COALESCE((
+            SELECT operacao.id
+            FROM estoque_operacoes operacao
+            INNER JOIN producao_registros registro
+              ON operacao.origem_tipo = 'PRODUCAO'
+              AND operacao.origem_id = registro.id
+              AND operacao.chave_idempotencia =
+                'PRODUCAO:' || CAST(registro.id AS TEXT)
+            WHERE registro.chave_idempotencia = ?
+          ), 0),
+          ?,
+          COALESCE((SELECT produto_id FROM producao_registros WHERE chave_idempotencia = ?), 0),
+          NULL, NULL, NULL, NULL,
+          COALESCE((SELECT quantidade_fardos FROM producao_registros WHERE chave_idempotencia = ?), 0),
+          1,
+          CURRENT_TIMESTAMP
+        )
+      `).bind(chaveItem, local.id, chaveItem, chaveItem)
+    );
+  }
+
+  try {
+    await env.DB.batch(statements);
+  } catch (err) {
+    const concorrente = await carregarLoteProducaoCompleto(env, chaveLote, true);
+    if (concorrente) {
+      const validacao = validarLoteExistenteContraPayload(concorrente, esperado, local.id);
+      if (validacao) return respostaConflitoLote(validacao, concorrente);
+      return json({ success: true, idempotente: true, lote: concorrente });
+    }
+    throw err;
+  }
+
+  const lote = await carregarLoteProducaoCompleto(env, chaveLote, true);
+  if (!lote) throw new Error("O batch não confirmou a criação do lote de Produção.");
+  const validacaoFinal = validarLoteExistenteContraPayload(lote, esperado, local.id);
+  if (validacaoFinal) throw new Error(`Lote criado com estrutura inválida: ${validacaoFinal.mensagem}`);
+
+  return json({ success: true, idempotente: false, lote }, 201);
+}
+
+async function listarLotesProducao(request, env, user) {
+  if (!acessoProducaoPermitido(user)) return acessoNegado();
+
+  const url = new URL(request.url);
+  const receitaBaseId = Number(url.searchParams.get("receita_base_id") || 0);
+  const produtoId = Number(url.searchParams.get("produto_id") || 0);
+  const usuarioId = Number(url.searchParams.get("usuario_id") || 0);
+  const status = normalizeText(url.searchParams.get("status")).toUpperCase();
+  const fluxo = normalizeText(url.searchParams.get("fluxo")).toUpperCase();
+  const dataInicial = normalizeText(url.searchParams.get("data_inicial"));
+  const dataFinal = normalizeText(url.searchParams.get("data_final"));
+
+  if (receitaBaseId && (!Number.isInteger(receitaBaseId) || receitaBaseId <= 0)) return json({ error: "Receita Base inválida." }, 400);
+  if (produtoId && (!Number.isInteger(produtoId) || produtoId <= 0)) return json({ error: "Produto inválido." }, 400);
+  if (usuarioId && (!Number.isInteger(usuarioId) || usuarioId <= 0)) return json({ error: "Usuário inválido." }, 400);
+  if (status && !new Set(["ABERTO", "ENCERRADO"]).has(status)) return json({ error: "Status de lote inválido." }, 400);
+  if (fluxo && !new Set(["V1_LEGADO", "V1_1_GRADUAL"]).has(fluxo)) return json({ error: "Fluxo de lote inválido." }, 400);
+  if (dataInicial && !dataOperacionalValida(dataInicial)) return json({ error: "Data inicial inválida." }, 400);
+  if (dataFinal && !dataOperacionalValida(dataFinal)) return json({ error: "Data final inválida." }, 400);
+  if (dataInicial && dataFinal && dataInicial > dataFinal) return json({ error: "Período inválido." }, 400);
+
+  const filtros = ["1 = 1"];
+  const parametros = [];
+  if (receitaBaseId) { filtros.push("lote.receita_base_id = ?"); parametros.push(receitaBaseId); }
+  if (usuarioId) { filtros.push("lote.usuario_id = ?"); parametros.push(usuarioId); }
+  if (dataInicial) { filtros.push("lote.data_producao >= ?"); parametros.push(dataInicial); }
+  if (dataFinal) { filtros.push("lote.data_producao <= ?"); parametros.push(dataFinal); }
+  if (status) { filtros.push("lote.status = ?"); parametros.push(status); }
+  if (fluxo) { filtros.push("lote.fluxo = ?"); parametros.push(fluxo); }
+  if (produtoId) {
+    filtros.push(`(
+      EXISTS (SELECT 1 FROM producao_registros filtro_registro WHERE filtro_registro.lote_id = lote.id AND filtro_registro.produto_id = ?)
+      OR EXISTS (SELECT 1 FROM producao_lote_produtos filtro_vinculo WHERE filtro_vinculo.lote_id = lote.id AND filtro_vinculo.produto_id = ?)
+    )`);
+    parametros.push(produtoId, produtoId);
+  }
+
+  const resultado = await env.DB.prepare(`
+    SELECT
+      lote.id, lote.receita_base_id, receita.nome AS receita_base_nome,
+      receita.versao AS receita_base_versao,
+      lote.quantidade_receitas_base, lote.data_producao,
+      lote.usuario_id, usuario.nome AS usuario_nome,
+      lote.observacao, lote.chave_idempotencia, lote.created_at,
+      lote.fluxo, lote.status, lote.encerrado_em, lote.encerrado_por,
+      lote.motivo_encerramento,
+      COUNT(DISTINCT registro.produto_id) AS total_produtos,
+      (SELECT COUNT(*) FROM producao_lote_produtos vinculo WHERE vinculo.lote_id = lote.id) AS total_produtos_vinculados,
+      COALESCE(SUM(registro.quantidade_fardos), 0) AS total_fardos,
+      COALESCE(SUM(registro.quantidade_pacotes), 0) AS total_pacotes,
+      COALESCE(SUM(registro.valor_producao), 0) AS valor_producao,
+      COALESCE(SUM(registro.quantidade_fardos), 0) / lote.quantidade_receitas_base AS rendimento_total_por_receita
+    FROM producao_lotes lote
+    INNER JOIN producao_receitas_base receita ON receita.id = lote.receita_base_id
+    LEFT JOIN vendedores usuario ON usuario.id = lote.usuario_id
+    LEFT JOIN producao_registros registro ON registro.lote_id = lote.id
+    WHERE ${filtros.join(" AND ")}
+    GROUP BY lote.id, receita.nome, receita.versao, usuario.nome
+    ORDER BY lote.data_producao DESC, lote.id DESC
+    LIMIT 500
+  `).bind(...parametros).all();
+
+  return json(resultado.results || []);
+}
+
+async function obterLoteProducao(env, user, loteId) {
+  if (!acessoProducaoPermitido(user)) return acessoNegado();
+  if (!Number.isInteger(loteId) || loteId <= 0) return json({ error: "Lote inválido." }, 400);
+
+  const lote = await carregarLoteProducaoCompleto(env, loteId);
+  if (!lote) return json({ error: "Lote de Produção não encontrado." }, 404);
+  return json(lote);
+}
+
+function chaveAberturaLoteV11(chaveCliente) {
+  return `LOTE_PRODUCAO_V1_1:${chaveCliente}`;
+}
+
+function chaveLancamentoLoteV11(loteId, chaveCliente) {
+  return `LANCAMENTO_PRODUCAO:${loteId}:${chaveCliente}`;
+}
+
+async function carregarVinculosAberturaV11(env, loteId, chaveCliente) {
+  const resultado = await env.DB.prepare(`
+    SELECT produto_id, pacotes_por_fardo_snapshot, valor_por_pacote_snapshot
+    FROM producao_lote_produtos
+    WHERE lote_id = ? AND chave_idempotencia LIKE ?
+    ORDER BY produto_id
+  `).bind(loteId, `LOTE_PRODUTO_ABERTURA:${chaveCliente}:PRODUTO:%`).all();
+  return resultado.results || [];
+}
+
+function validarAberturaV11Existente(lote, vinculos, esperado) {
+  if (lote.fluxo !== "V1_1_GRADUAL"
+    || Number(lote.receita_base_id) !== esperado.receitaBaseId
+    || !compararNumeroProducao(lote.quantidade_receitas_base, esperado.quantidadeReceitasBase)
+    || lote.data_producao !== esperado.dataProducao
+    || Number(lote.usuario_id) !== esperado.usuarioId
+    || normalizeText(lote.observacao) !== esperado.observacao) {
+    return { tipo: "DIVERGENTE", mensagem: "A chave de abertura já foi utilizada com dados diferentes." };
+  }
+  if (vinculos.length !== esperado.produtos.length) return { tipo: "INCOMPLETO", mensagem: "A abertura existente possui produtos incompletos." };
+  const ids = new Set(vinculos.map(vinculo => Number(vinculo.produto_id)));
+  if (esperado.produtos.some(produtoId => !ids.has(produtoId))) return { tipo: "DIVERGENTE", mensagem: "A abertura existente possui produtos diferentes." };
+  return null;
+}
+
+async function abrirLoteProducaoV11(request, env, user) {
+  if (!acessoProducaoPermitido(user)) return acessoNegado();
+  const dados = await request.json();
+  const receitaBaseId = Number(dados.receita_base_id || 0);
+  const quantidadeReceitasBase = Number(dados.quantidade_receitas_base);
+  const dataProducao = normalizeText(dados.data_producao || obterDataLocalCuiaba());
+  const observacao = normalizeText(dados.observacao);
+  const chaveCliente = normalizeText(dados.chave_idempotencia);
+  const produtos = Array.isArray(dados.produtos) ? dados.produtos.map(Number) : [];
+  if (!Number.isInteger(receitaBaseId) || receitaBaseId <= 0) return json({ error: "Receita Base inválida." }, 400);
+  if (!Number.isFinite(quantidadeReceitasBase) || quantidadeReceitasBase <= 0) return json({ error: "A quantidade de Receitas Base deve ser maior que zero." }, 400);
+  if (!dataOperacionalValida(dataProducao)) return json({ error: "Data da produção inválida." }, 400);
+  if (!observacao) return json({ error: "A observação para identificação física do lote é obrigatória." }, 400);
+  if (!chaveCliente || chaveCliente.length > 120) return json({ error: "Chave de idempotência inválida." }, 400);
+  if (!produtos.length) return json({ error: "Vincule ao menos um produto ao lote." }, 400);
+  if (produtos.some(id => !Number.isInteger(id) || id <= 0)) return json({ error: "Todos os produtos devem ser válidos." }, 400);
+  if (new Set(produtos).size !== produtos.length) return json({ error: "O mesmo produto não pode ser vinculado duas vezes." }, 400);
+
+  const chaveLote = chaveAberturaLoteV11(chaveCliente);
+  const esperado = { receitaBaseId, quantidadeReceitasBase, dataProducao, observacao, usuarioId: Number(user.vendedorId), produtos };
+  const existente = await carregarLoteProducaoCompleto(env, chaveLote, true);
+  if (existente) {
+    const vinculos = await carregarVinculosAberturaV11(env, existente.id, chaveCliente);
+    const validacao = validarAberturaV11Existente(existente, vinculos, esperado);
+    if (validacao) return respostaConflitoLote(validacao, existente);
+    return json({ success: true, idempotente: true, lote: existente });
+  }
+
+  const receita = await env.DB.prepare("SELECT id FROM producao_receitas_base WHERE id = ? AND ativo = 1").bind(receitaBaseId).first();
+  if (!receita) return json({ error: "Receita Base ativa não encontrada." }, 409);
+  const parametros = await Promise.all(produtos.map(produtoId => env.DB.prepare(`
+    SELECT produto.id, parametro.pacotes_por_fardo, parametro.valor_por_pacote
+    FROM produtos produto
+    INNER JOIN producao_parametros_produto parametro ON parametro.produto_id = produto.id AND parametro.ativo = 1
+    WHERE produto.id = ? AND produto.ativo = 'ativo'
+  `).bind(produtoId).first()));
+  if (parametros.some(item => !item)) return json({ error: "Todos os produtos devem estar ativos e possuir parâmetros de Produção ativos." }, 409);
+
+  const statements = [env.DB.prepare(`
+    INSERT INTO producao_lotes (
+      receita_base_id, quantidade_receitas_base, data_producao,
+      usuario_id, observacao, chave_idempotencia, created_at,
+      fluxo, status
+    )
+    SELECT receita.id, ?, ?, usuario.id, ?, ?, CURRENT_TIMESTAMP,
+      'V1_1_GRADUAL', 'ABERTO'
+    FROM producao_receitas_base receita
+    INNER JOIN vendedores usuario ON usuario.id = ?
+    WHERE receita.id = ? AND receita.ativo = 1
+      AND usuario.status = 'ativo' AND usuario.role IN ('admin', 'operacao')
+  `).bind(quantidadeReceitasBase, dataProducao, observacao, chaveLote, user.vendedorId, receitaBaseId)];
+  for (const produtoId of produtos) statements.push(env.DB.prepare(`
+    INSERT INTO producao_lote_produtos (
+      lote_id, produto_id, pacotes_por_fardo_snapshot,
+      valor_por_pacote_snapshot, incluido_por, observacao,
+      chave_idempotencia, created_at
+    ) VALUES (
+      COALESCE((SELECT id FROM producao_lotes WHERE chave_idempotencia = ? AND fluxo = 'V1_1_GRADUAL' AND status = 'ABERTO'), 0),
+      COALESCE((SELECT produto.id FROM produtos produto INNER JOIN producao_parametros_produto parametro ON parametro.produto_id = produto.id AND parametro.ativo = 1 WHERE produto.id = ? AND produto.ativo = 'ativo'), 0),
+      COALESCE((SELECT parametro.pacotes_por_fardo FROM produtos produto INNER JOIN producao_parametros_produto parametro ON parametro.produto_id = produto.id AND parametro.ativo = 1 WHERE produto.id = ? AND produto.ativo = 'ativo'), 0),
+      COALESCE((SELECT parametro.valor_por_pacote FROM produtos produto INNER JOIN producao_parametros_produto parametro ON parametro.produto_id = produto.id AND parametro.ativo = 1 WHERE produto.id = ? AND produto.ativo = 'ativo'), -1),
+      ?, 'Vinculado na abertura do lote', ?, CURRENT_TIMESTAMP
+    )
+  `).bind(chaveLote, produtoId, produtoId, produtoId, user.vendedorId, `LOTE_PRODUTO_ABERTURA:${chaveCliente}:PRODUTO:${produtoId}`));
+  try {
+    await env.DB.batch(statements);
+  } catch (err) {
+    const concorrente = await carregarLoteProducaoCompleto(env, chaveLote, true);
+    if (concorrente) {
+      const vinculos = await carregarVinculosAberturaV11(env, concorrente.id, chaveCliente);
+      const validacao = validarAberturaV11Existente(concorrente, vinculos, esperado);
+      if (validacao) return respostaConflitoLote(validacao, concorrente);
+      return json({ success: true, idempotente: true, lote: concorrente });
+    }
+    throw err;
+  }
+  const lote = await carregarLoteProducaoCompleto(env, chaveLote, true);
+  const vinculos = lote ? await carregarVinculosAberturaV11(env, lote.id, chaveCliente) : [];
+  const validacao = lote ? validarAberturaV11Existente(lote, vinculos, esperado) : { tipo: "INCOMPLETO", mensagem: "O lote não foi criado." };
+  if (validacao) return json({ error: "A abertura do lote ficou incompleta. Solicite auditoria.", detalhe: validacao.mensagem }, 409);
+  if (lote.itens.length) return json({ error: "A abertura criou lançamentos indevidos. Solicite auditoria." }, 409);
+  return json({ success: true, idempotente: false, lote }, 201);
+}
+
+async function incluirProdutoLoteV11(request, env, user, loteId) {
+  if (!acessoProducaoPermitido(user)) return acessoNegado();
+  if (!Number.isInteger(loteId) || loteId <= 0) return json({ error: "Lote inválido." }, 400);
+  const dados = await request.json(), produtoId = Number(dados.produto_id || 0);
+  const observacao = normalizeText(dados.observacao), chaveCliente = normalizeText(dados.chave_idempotencia);
+  if (!Number.isInteger(produtoId) || produtoId <= 0) return json({ error: "Produto inválido." }, 400);
+  if (!chaveCliente || chaveCliente.length > 120) return json({ error: "Chave de idempotência inválida." }, 400);
+  const chave = `INCLUSAO_PRODUTO_LOTE:${loteId}:${chaveCliente}`;
+  const existente = await env.DB.prepare("SELECT * FROM producao_lote_produtos WHERE chave_idempotencia = ?").bind(chave).first();
+  if (existente) {
+    if (Number(existente.lote_id) !== loteId || Number(existente.produto_id) !== produtoId || normalizeText(existente.observacao) !== observacao) return json({ error: "A chave de inclusão já foi usada com dados diferentes." }, 409);
+    return json({ success: true, idempotente: true, vinculo: existente });
+  }
+  const lote = await buscarLoteProducaoPorId(env, loteId);
+  if (!lote) return json({ error: "Lote não encontrado." }, 404);
+  if (lote.fluxo !== "V1_1_GRADUAL" || lote.status !== "ABERTO") return json({ error: "Somente lotes V1.1 abertos aceitam novos produtos." }, 409);
+  const jaVinculado = await env.DB.prepare("SELECT id FROM producao_lote_produtos WHERE lote_id = ? AND produto_id = ?").bind(loteId, produtoId).first();
+  if (jaVinculado) return json({ error: "O produto já está vinculado ao lote." }, 409);
+  try {
+    await env.DB.batch([env.DB.prepare(`
+      INSERT INTO producao_lote_produtos (
+        lote_id, produto_id, pacotes_por_fardo_snapshot,
+        valor_por_pacote_snapshot, incluido_por, observacao,
+        chave_idempotencia, created_at
+      ) VALUES (
+        COALESCE((SELECT id FROM producao_lotes WHERE id = ? AND fluxo = 'V1_1_GRADUAL' AND status = 'ABERTO'), 0),
+        COALESCE((SELECT produto.id FROM produtos produto INNER JOIN producao_parametros_produto parametro ON parametro.produto_id = produto.id AND parametro.ativo = 1 WHERE produto.id = ? AND produto.ativo = 'ativo'), 0),
+        COALESCE((SELECT parametro.pacotes_por_fardo FROM produtos produto INNER JOIN producao_parametros_produto parametro ON parametro.produto_id = produto.id AND parametro.ativo = 1 WHERE produto.id = ? AND produto.ativo = 'ativo'), 0),
+        COALESCE((SELECT parametro.valor_por_pacote FROM produtos produto INNER JOIN producao_parametros_produto parametro ON parametro.produto_id = produto.id AND parametro.ativo = 1 WHERE produto.id = ? AND produto.ativo = 'ativo'), -1),
+        ?, ?, ?, CURRENT_TIMESTAMP
+      )
+    `).bind(loteId, produtoId, produtoId, produtoId, user.vendedorId, observacao || null, chave)]);
+  } catch (err) {
+    const concorrente = await env.DB.prepare("SELECT * FROM producao_lote_produtos WHERE chave_idempotencia = ?").bind(chave).first();
+    if (concorrente && Number(concorrente.lote_id) === loteId && Number(concorrente.produto_id) === produtoId && normalizeText(concorrente.observacao) === observacao) return json({ success: true, idempotente: true, vinculo: concorrente });
+    if (concorrente) return json({ error: "A chave de inclusão já foi usada com dados diferentes." }, 409);
+    return json({ error: "O produto não foi incluído. Confirme que o lote continua aberto e o produto possui parâmetros ativos." }, 409);
+  }
+  const vinculo = await env.DB.prepare("SELECT * FROM producao_lote_produtos WHERE chave_idempotencia = ?").bind(chave).first();
+  if (!vinculo) return json({ error: "A inclusão do produto ficou incompleta. Solicite auditoria." }, 409);
+  return json({ success: true, idempotente: false, vinculo }, 201);
+}
+
+async function auditarEntradaLancamentoV11(env, registroId) {
+  return env.DB.prepare(`
+    SELECT registro.id AS registro_id, registro.lote_id, registro.produto_id,
+      registro.usuario_id, registro.data_producao, registro.quantidade_fardos,
+      registro.observacao, registro.chave_idempotencia, registro.confirmacao_fisica,
+      COUNT(DISTINCT operacao.id) AS total_operacoes,
+      COUNT(movimento.id) AS total_movimentos,
+      MAX(operacao.id) AS operacao_id, MAX(movimento.id) AS movimentacao_id,
+      MAX(movimento.local_id) AS local_id,
+      MAX(movimento.produto_id) AS estoque_produto_id,
+      MAX(movimento.quantidade) AS estoque_quantidade,
+      MAX(movimento.efeito) AS estoque_efeito
+    FROM producao_registros registro
+    LEFT JOIN estoque_operacoes operacao
+      ON operacao.tipo = 'ENTRADA_PRODUCAO' AND operacao.origem_tipo = 'PRODUCAO'
+      AND operacao.origem_id = registro.id
+      AND operacao.chave_idempotencia = 'PRODUCAO:' || CAST(registro.id AS TEXT)
+    LEFT JOIN estoque_movimentacoes movimento ON movimento.operacao_id = operacao.id
+    WHERE registro.id = ?
+    GROUP BY registro.id
+  `).bind(registroId).first();
+}
+
+function validarLancamentoV11Existente(registro, esperado, localId) {
+  if (!registro) return { tipo: "INCOMPLETO", mensagem: "O lançamento não foi encontrado." };
+  if (Number(registro.lote_id) !== esperado.loteId || Number(registro.produto_id) !== esperado.produtoId
+    || Number(registro.usuario_id) !== esperado.usuarioId || registro.data_producao !== esperado.dataMontagem
+    || Number(registro.quantidade_fardos) !== esperado.quantidadeFardos
+    || normalizeText(registro.observacao) !== esperado.observacao) return { tipo: "DIVERGENTE", mensagem: "A chave do lançamento já foi usada com dados diferentes." };
+  if (Number(registro.confirmacao_fisica) !== 1 || Number(registro.total_operacoes) !== 1
+    || Number(registro.total_movimentos) !== 1 || Number(registro.operacao_id) <= 0
+    || Number(registro.movimentacao_id) <= 0 || Number(registro.local_id) !== Number(localId)
+    || Number(registro.estoque_produto_id) !== esperado.produtoId
+    || Number(registro.estoque_quantidade) !== esperado.quantidadeFardos
+    || Number(registro.estoque_efeito) !== 1) return { tipo: "INCOMPLETO", mensagem: "O lançamento ou sua entrada de estoque está incompleto." };
+  return null;
+}
+
+async function registrarLancamentoLoteV11(request, env, user, loteId) {
+  if (!acessoProducaoPermitido(user)) return acessoNegado();
+  if (!Number.isInteger(loteId) || loteId <= 0) return json({ error: "Lote inválido." }, 400);
+  const dados = await request.json(), produtoId = Number(dados.produto_id || 0), quantidadeFardos = Number(dados.quantidade_fardos);
+  const dataMontagem = normalizeText(dados.data_montagem || dados.data_producao || obterDataLocalCuiaba());
+  const observacaoLivre = normalizeText(dados.observacao), chaveCliente = normalizeText(dados.chave_idempotencia);
+  if (!Number.isInteger(produtoId) || produtoId <= 0) return json({ error: "Produto inválido." }, 400);
+  if (!Number.isInteger(quantidadeFardos) || quantidadeFardos <= 0) return json({ error: "A quantidade deve ser um número inteiro de fardos maior que zero." }, 400);
+  if (!dataOperacionalValida(dataMontagem)) return json({ error: "Data da montagem dos fardos inválida." }, 400);
+  if (dados.confirmacao_fisica !== true) return json({ error: "Confirme fisicamente os fardos montados." }, 400);
+  if (!chaveCliente || chaveCliente.length > 120) return json({ error: "Chave de idempotência inválida." }, 400);
+  const chave = chaveLancamentoLoteV11(loteId, chaveCliente), observacao = `MONTAGEM_FISICA_CONFIRMADA${observacaoLivre ? ` | ${observacaoLivre}` : ""}`;
+  const esperado = { loteId, produtoId, usuarioId: Number(user.vendedorId), dataMontagem, quantidadeFardos, observacao };
+  const registroExistente = await buscarRegistroProducaoPorChave(env, chave);
+  const local = await obterEstoqueCentral(env);
+  if (!local) return json({ error: "Estoque Central ainda não foi inicializado." }, 409);
+  if (registroExistente) {
+    const auditoria = await auditarEntradaLancamentoV11(env, registroExistente.id);
+    const validacao = validarLancamentoV11Existente(auditoria, esperado, local.id);
+    if (validacao) return json({ error: validacao.tipo === "INCOMPLETO" ? "O lançamento existente está incompleto. Solicite auditoria." : validacao.mensagem, detalhe: validacao.mensagem }, 409);
+    return json({ success: true, idempotente: true, lancamento: auditoria });
+  }
+  const lote = await buscarLoteProducaoPorId(env, loteId);
+  if (!lote) return json({ error: "Lote não encontrado." }, 404);
+  if (lote.fluxo !== "V1_1_GRADUAL" || lote.status !== "ABERTO") return json({ error: "Somente lotes V1.1 abertos aceitam lançamentos." }, 409);
+  const vinculo = await env.DB.prepare("SELECT id FROM producao_lote_produtos WHERE lote_id = ? AND produto_id = ?").bind(loteId, produtoId).first();
+  if (!vinculo) return json({ error: "O produto não está vinculado ao lote." }, 409);
+  const statements = [
+    env.DB.prepare(`
+      INSERT INTO producao_registros (
+        lote_id, produto_id, usuario_id, data_producao,
+        quantidade_fardos, pacotes_por_fardo_snapshot,
+        quantidade_pacotes, valor_por_pacote_snapshot,
+        valor_producao, observacao, chave_idempotencia,
+        created_at, confirmacao_fisica
+      )
+      SELECT lote.id, vinculo.produto_id, ?, ?, ?,
+        vinculo.pacotes_por_fardo_snapshot,
+        ? * vinculo.pacotes_por_fardo_snapshot,
+        vinculo.valor_por_pacote_snapshot,
+        ROUND(? * vinculo.pacotes_por_fardo_snapshot * vinculo.valor_por_pacote_snapshot, 2),
+        ?, ?, CURRENT_TIMESTAMP, 1
+      FROM producao_lotes lote
+      INNER JOIN producao_lote_produtos vinculo ON vinculo.lote_id = lote.id AND vinculo.produto_id = ?
+      WHERE lote.id = ? AND lote.fluxo = 'V1_1_GRADUAL' AND lote.status = 'ABERTO'
+    `).bind(user.vendedorId, dataMontagem, quantidadeFardos, quantidadeFardos, quantidadeFardos, observacao, chave, produtoId, loteId),
+    env.DB.prepare(`
+      INSERT INTO estoque_operacoes (
+        tipo, status, data_operacao, origem_tipo, origem_id,
+        chave_idempotencia, operacao_estornada_id, usuario_id, observacao, created_at
+      )
+      SELECT 'ENTRADA_PRODUCAO', 'CONFIRMADA', registro.data_producao,
+        'PRODUCAO', registro.id, 'PRODUCAO:' || CAST(registro.id AS TEXT),
+        NULL, registro.usuario_id,
+        'Entrada automática da Produção #' || CAST(registro.id AS TEXT), CURRENT_TIMESTAMP
+      FROM producao_registros registro WHERE registro.chave_idempotencia = ?
+    `).bind(chave),
+    env.DB.prepare(`
+      INSERT INTO estoque_movimentacoes (
+        operacao_id, local_id, produto_id, carga_id, carga_item_id,
+        visita_id, visita_item_id, quantidade, efeito, created_at
+      ) VALUES (
+        COALESCE((SELECT operacao.id FROM estoque_operacoes operacao INNER JOIN producao_registros registro ON operacao.origem_id = registro.id AND operacao.origem_tipo = 'PRODUCAO' WHERE registro.chave_idempotencia = ? AND operacao.chave_idempotencia = 'PRODUCAO:' || CAST(registro.id AS TEXT)), 0),
+        ?, COALESCE((SELECT produto_id FROM producao_registros WHERE chave_idempotencia = ?), 0),
+        NULL, NULL, NULL, NULL,
+        COALESCE((SELECT quantidade_fardos FROM producao_registros WHERE chave_idempotencia = ?), 0),
+        1, CURRENT_TIMESTAMP
+      )
+    `).bind(chave, local.id, chave, chave),
+  ];
+  try {
+    await env.DB.batch(statements);
+  } catch (err) {
+    const concorrente = await buscarRegistroProducaoPorChave(env, chave);
+    if (concorrente) {
+      const auditoria = await auditarEntradaLancamentoV11(env, concorrente.id);
+      const validacao = validarLancamentoV11Existente(auditoria, esperado, local.id);
+      if (validacao) return json({ error: "O lançamento concorrente ficou incompleto. Solicite auditoria.", detalhe: validacao.mensagem }, 409);
+      return json({ success: true, idempotente: true, lancamento: auditoria });
+    }
+    const loteAtual = await buscarLoteProducaoPorId(env, loteId);
+    if (loteAtual?.status === "ENCERRADO") return json({ error: "O lote foi encerrado antes da confirmação do lançamento." }, 409);
+    const mensagem = String(err?.message || "");
+    if (mensagem.includes("CHECK constraint failed") || mensagem.includes("FOREIGN KEY constraint failed")) return json({ error: "O lançamento não foi gravado integralmente. Nenhuma entrada de estoque foi mantida." }, 409);
+    throw err;
+  }
+  const registro = await buscarRegistroProducaoPorChave(env, chave);
+  const auditoria = registro ? await auditarEntradaLancamentoV11(env, registro.id) : null;
+  const validacao = validarLancamentoV11Existente(auditoria, esperado, local.id);
+  if (validacao) return json({ error: "O lançamento ficou estruturalmente incompleto. Solicite auditoria.", detalhe: validacao.mensagem }, 409);
+  return json({ success: true, idempotente: false, lancamento: auditoria }, 201);
+}
+
+async function encerrarLoteProducaoV11(request, env, user, loteId) {
+  if (!acessoProducaoPermitido(user)) return acessoNegado();
+  if (!Number.isInteger(loteId) || loteId <= 0) return json({ error: "Lote inválido." }, 400);
+  const dados = await request.json(), chaveCliente = normalizeText(dados.chave_idempotencia), motivo = normalizeText(dados.motivo_encerramento);
+  if (dados.confirmacao_encerramento !== true) return json({ error: "Confirme explicitamente o encerramento do lote." }, 400);
+  if (!chaveCliente || chaveCliente.length > 120) return json({ error: "Chave de encerramento inválida." }, 400);
+  const chave = `ENCERRAMENTO_LOTE:${loteId}:${chaveCliente}`;
+  let lote = await buscarLoteProducaoPorId(env, loteId);
+  if (!lote) return json({ error: "Lote não encontrado." }, 404);
+  if (lote.fluxo !== "V1_1_GRADUAL") return json({ error: "Lotes legados não podem ser encerrados por esta rota." }, 409);
+  if (lote.status === "ENCERRADO") {
+    if (lote.chave_encerramento !== chave || normalizeText(lote.motivo_encerramento) !== motivo) return json({ error: "O lote já foi encerrado com dados diferentes." }, 409);
+    return json({ success: true, idempotente: true, lote });
+  }
+  const auditoria = await env.DB.prepare(`
+    SELECT COUNT(*) AS total_lancamentos,
+      SUM(CASE WHEN
+        (SELECT COUNT(*) FROM estoque_operacoes operacao WHERE operacao.tipo = 'ENTRADA_PRODUCAO' AND operacao.origem_tipo = 'PRODUCAO' AND operacao.origem_id = registro.id AND operacao.chave_idempotencia = 'PRODUCAO:' || CAST(registro.id AS TEXT)) <> 1
+        OR (SELECT COUNT(*) FROM estoque_movimentacoes movimento INNER JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id WHERE operacao.origem_tipo = 'PRODUCAO' AND operacao.origem_id = registro.id) <> 1
+        OR NOT EXISTS (SELECT 1 FROM estoque_movimentacoes movimento INNER JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id INNER JOIN estoque_locais local ON local.id = movimento.local_id WHERE operacao.origem_tipo = 'PRODUCAO' AND operacao.origem_id = registro.id AND local.tipo = 'CENTRAL' AND local.ativo = 1 AND movimento.produto_id = registro.produto_id AND movimento.quantidade = registro.quantidade_fardos AND movimento.efeito = 1)
+      THEN 1 ELSE 0 END) AS lancamentos_incompletos
+    FROM producao_registros registro WHERE registro.lote_id = ?
+  `).bind(loteId).first();
+  const total = Number(auditoria?.total_lancamentos || 0), incompletos = Number(auditoria?.lancamentos_incompletos || 0);
+  if (incompletos) return json({ error: "O lote possui lançamentos sem entrada de estoque íntegra. Solicite auditoria." }, 409);
+  if (!total && (dados.confirmacao_sem_lancamentos !== true || !motivo)) return json({ error: "Para encerrar um lote sem lançamentos, confirme a exceção e informe o motivo." }, 400);
+  const resultado = await env.DB.prepare(`
+    UPDATE producao_lotes
+    SET status = 'ENCERRADO', encerrado_em = CURRENT_TIMESTAMP,
+      encerrado_por = ?, chave_encerramento = ?, motivo_encerramento = ?
+    WHERE id = ? AND fluxo = 'V1_1_GRADUAL' AND status = 'ABERTO'
+  `).bind(user.vendedorId, chave, motivo || null, loteId).run();
+  lote = await buscarLoteProducaoPorId(env, loteId);
+  if (lote?.status === "ENCERRADO" && lote.chave_encerramento === chave && normalizeText(lote.motivo_encerramento) === motivo) return json({ success: true, idempotente: Number(resultado?.meta?.changes || 0) === 0, lote });
+  if (lote?.status === "ENCERRADO") return json({ error: "O lote foi encerrado concorrentemente com dados diferentes." }, 409);
+  return json({ error: "O encerramento não foi confirmado. Solicite auditoria." }, 409);
+}
+
 const TIPOS_OPERACAO_ESTOQUE = new Set([
   "INVENTARIO_INICIAL", "ENTRADA", "TRANSFERENCIA_CARGA", "SAIDA_VENDA",
   "RETORNO_CARGA", "AJUSTE_ENTRADA", "AJUSTE_SAIDA", "INVENTARIO_AJUSTE",
@@ -1623,6 +2453,696 @@ async function registrarAjusteEstoque(request, env, user) {
   });
 }
 
+function acessoCargaPermitido(user) {
+  return usuarioTemRole(user, "admin", "operacao");
+}
+
+function chaveTransferenciaCarga(chaveCliente) {
+  return `TRANSFERENCIA_CARGA:${chaveCliente}`;
+}
+
+async function listarVendedoresCarga(env, user) {
+  if (!acessoCargaPermitido(user)) return acessoNegado();
+  const resultado = await env.DB.prepare(`
+    SELECT id, nome FROM vendedores
+    WHERE role = 'vendedor' AND status = 'ativo'
+    ORDER BY nome COLLATE NOCASE, id
+  `).all();
+  return json(resultado.results || []);
+}
+
+async function carregarCargaCompleta(env, cargaId) {
+  const carga = await env.DB.prepare(`
+    SELECT carga.id, carga.data_carga, carga.vendedor_id,
+      vendedor.nome AS vendedor_nome, carga.local_carga_id,
+      local.nome AS local_carga_nome, carga.status,
+      carga.aberta_em, carga.aberta_por, auditor.nome AS auditor_nome,
+      carga.cancelada_em, carga.cancelada_por,
+      cancelador.nome AS cancelador_nome, carga.motivo_cancelamento,
+      carga.observacoes_abertura, carga.created_at, carga.updated_at
+    FROM estoque_cargas carga
+    INNER JOIN vendedores vendedor ON vendedor.id = carga.vendedor_id
+    INNER JOIN estoque_locais local ON local.id = carga.local_carga_id
+    LEFT JOIN vendedores auditor ON auditor.id = carga.aberta_por
+    LEFT JOIN vendedores cancelador ON cancelador.id = carga.cancelada_por
+    WHERE carga.id = ?
+  `).bind(cargaId).first();
+  if (!carga) return null;
+
+  const itens = await env.DB.prepare(`
+    SELECT item.id, item.carga_id, item.produto_id,
+      produto.nome AS produto_nome, item.quantidade_carregada,
+      item.observacao, item.created_at,
+      SUM(CASE WHEN operacao.tipo = 'TRANSFERENCIA_CARGA' AND movimento.local_id = central.id AND movimento.efeito = -1 THEN 1 ELSE 0 END) AS saidas_central,
+      SUM(CASE WHEN operacao.tipo = 'TRANSFERENCIA_CARGA' AND movimento.local_id = carga.local_carga_id AND movimento.efeito = 1 THEN 1 ELSE 0 END) AS entradas_carga,
+      SUM(CASE WHEN operacao.tipo = 'TRANSFERENCIA_CARGA' AND movimento.local_id = central.id AND movimento.efeito = -1 THEN movimento.quantidade ELSE 0 END) AS quantidade_saida,
+      SUM(CASE WHEN operacao.tipo = 'TRANSFERENCIA_CARGA' AND movimento.local_id = carga.local_carga_id AND movimento.efeito = 1 THEN movimento.quantidade ELSE 0 END) AS quantidade_entrada
+    FROM estoque_carga_itens item
+    INNER JOIN estoque_cargas carga ON carga.id = item.carga_id
+    INNER JOIN produtos produto ON produto.id = item.produto_id
+    INNER JOIN estoque_locais central ON central.tipo = 'CENTRAL' AND central.ativo = 1
+    LEFT JOIN estoque_movimentacoes movimento ON movimento.carga_item_id = item.id
+    LEFT JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id
+    WHERE item.carga_id = ?
+    GROUP BY item.id, produto.nome, carga.local_carga_id
+    ORDER BY produto.nome COLLATE NOCASE, item.id
+  `).bind(cargaId).all();
+  const operacoesResultado = await env.DB.prepare(`
+    SELECT operacao.id, operacao.tipo, operacao.status,
+      operacao.data_operacao, operacao.chave_idempotencia,
+      operacao.operacao_estornada_id, operacao.usuario_id,
+      usuario.nome AS usuario_nome, operacao.observacao,
+      operacao.created_at, original.chave_idempotencia AS chave_operacao_original
+    FROM estoque_operacoes operacao
+    LEFT JOIN vendedores usuario ON usuario.id = operacao.usuario_id
+    LEFT JOIN estoque_operacoes original ON original.id = operacao.operacao_estornada_id
+    WHERE (
+      operacao.tipo = 'TRANSFERENCIA_CARGA'
+      AND operacao.origem_tipo = 'CARGA' AND operacao.origem_id = ?
+    ) OR (
+      operacao.tipo = 'ESTORNO'
+      AND operacao.operacao_estornada_id IN (
+        SELECT id FROM estoque_operacoes
+        WHERE tipo = 'TRANSFERENCIA_CARGA'
+          AND origem_tipo = 'CARGA' AND origem_id = ?
+      )
+    )
+    ORDER BY operacao.created_at, operacao.id
+  `).bind(cargaId, cargaId).all();
+  const operacoes = operacoesResultado.results || [];
+  if (operacoes.length) {
+    const ids = operacoes.map(() => "?").join(",");
+    const movimentos = await env.DB.prepare(`
+      SELECT movimento.id, movimento.operacao_id, movimento.local_id,
+        local.nome AS local_nome, local.tipo AS local_tipo,
+        movimento.produto_id, produto.nome AS produto_nome,
+        movimento.carga_id, movimento.carga_item_id,
+        movimento.quantidade, movimento.efeito, movimento.created_at
+      FROM estoque_movimentacoes movimento
+      INNER JOIN estoque_locais local ON local.id = movimento.local_id
+      INNER JOIN produtos produto ON produto.id = movimento.produto_id
+      WHERE movimento.operacao_id IN (${ids})
+      ORDER BY movimento.operacao_id, produto.nome COLLATE NOCASE, movimento.efeito
+    `).bind(...operacoes.map(operacao => operacao.id)).all();
+    const porOperacao = new Map(operacoes.map(operacao => [Number(operacao.id), []]));
+    for (const movimento of movimentos.results || []) porOperacao.get(Number(movimento.operacao_id))?.push(movimento);
+    for (const operacao of operacoes) {
+      operacao.movimentacoes = porOperacao.get(Number(operacao.id)) || [];
+      operacao.classificacao = operacao.tipo === "ESTORNO"
+        ? "CANCELAMENTO_ESTORNO"
+        : String(operacao.chave_idempotencia).startsWith("COMPLEMENTO_CARGA:")
+          ? "COMPLEMENTO" : "CARGA_INICIAL";
+    }
+  }
+  return { ...carga, itens: itens.results || [], operacoes };
+}
+
+async function carregarTransferenciaCargaPorChave(env, chave) {
+  const operacao = await env.DB.prepare(`
+    SELECT id, status, data_operacao, origem_id, chave_idempotencia,
+      usuario_id, observacao, created_at
+    FROM estoque_operacoes
+    WHERE tipo = 'TRANSFERENCIA_CARGA'
+      AND origem_tipo = 'CARGA' AND chave_idempotencia = ?
+  `).bind(chave).first();
+  if (!operacao?.origem_id) return null;
+  const carga = await carregarCargaCompleta(env, Number(operacao.origem_id));
+  if (!carga) return null;
+  const movimentos = await env.DB.prepare(`
+    SELECT movimento.produto_id, movimento.local_id,
+      movimento.quantidade, movimento.efeito, local.tipo AS local_tipo
+    FROM estoque_movimentacoes movimento
+    INNER JOIN estoque_locais local ON local.id = movimento.local_id
+    WHERE movimento.operacao_id = ?
+    ORDER BY movimento.produto_id, movimento.efeito
+  `).bind(operacao.id).all();
+  const agrupados = new Map();
+  for (const movimento of movimentos.results || []) {
+    const produtoId = Number(movimento.produto_id);
+    if (!agrupados.has(produtoId)) agrupados.set(produtoId, { produto_id: produtoId, saidas_central: 0, entradas_carga: 0, quantidade_saida: 0, quantidade_entrada: 0 });
+    const item = agrupados.get(produtoId);
+    if (movimento.local_tipo === "CENTRAL" && Number(movimento.efeito) === -1) {
+      item.saidas_central += 1; item.quantidade_saida += Number(movimento.quantidade);
+    }
+    if (movimento.local_id === carga.local_carga_id && Number(movimento.efeito) === 1) {
+      item.entradas_carga += 1; item.quantidade_entrada += Number(movimento.quantidade);
+    }
+  }
+  return { ...carga, operacao, itens_operacao: [...agrupados.values()] };
+}
+
+async function carregarCargaPorChave(env, chave) {
+  return carregarTransferenciaCargaPorChave(env, chave);
+}
+
+function validarCargaExistente(carga, esperado) {
+  if (Number(carga.vendedor_id) !== esperado.vendedorId
+    || carga.data_carga !== esperado.dataCarga
+    || Number(carga.aberta_por) !== esperado.auditorId
+    || normalizeText(carga.observacoes_abertura) !== esperado.observacoesAbertura) {
+    return { tipo: "DIVERGENTE", mensagem: "A chave de idempotência já foi usada com dados diferentes." };
+  }
+  if (carga.status !== "ABERTA" || carga.operacao?.status !== "CONFIRMADA" || carga.itens_operacao.length !== esperado.itens.length) {
+    return { tipo: "INCOMPLETA", mensagem: "A carga existente está estruturalmente incompleta." };
+  }
+  const itensPorProduto = new Map(carga.itens_operacao.map(item => [Number(item.produto_id), item]));
+  for (const esperadoItem of esperado.itens) {
+    const item = itensPorProduto.get(esperadoItem.produtoId);
+    if (!item) return { tipo: "INCOMPLETA", mensagem: "A carga existente não possui todos os produtos esperados." };
+    if (Number(item.saidas_central) !== 1 || Number(item.entradas_carga) !== 1
+      || Number(item.quantidade_saida) !== esperadoItem.quantidade
+      || Number(item.quantidade_entrada) !== esperadoItem.quantidade) {
+      return { tipo: "INCOMPLETA", mensagem: "A transferência de estoque da carga está incompleta." };
+    }
+  }
+  return null;
+}
+
+function respostaConflitoCarga(validacao, carga) {
+  return json({
+    error: validacao.tipo === "INCOMPLETA"
+      ? "A carga já existe, mas sua estrutura está incompleta. Solicite auditoria."
+      : validacao.mensagem,
+    detalhe: validacao.mensagem, carga_id: carga.id,
+  }, 409);
+}
+
+async function registrarCargaVendedor(request, env, user) {
+  if (!acessoCargaPermitido(user)) return acessoNegado();
+  const dados = await request.json();
+  const vendedorId = Number(dados.vendedor_id || 0);
+  const dataCarga = normalizeText(dados.data_carga || obterDataLocalCuiaba());
+  const chaveCliente = normalizeText(dados.chave_idempotencia);
+  const observacao = normalizeText(dados.observacao);
+  const itensRecebidos = Array.isArray(dados.itens) ? dados.itens : [];
+  if (!Number.isInteger(vendedorId) || vendedorId <= 0) return json({ error: "Selecione um vendedor válido." }, 400);
+  if (!dataOperacionalValida(dataCarga)) return json({ error: "Data da carga inválida." }, 400);
+  if (dados.confirmacao_auditoria !== true) return json({ error: "Confirme que a carga foi conferida fisicamente." }, 400);
+  if (!chaveCliente || chaveCliente.length > 140) return json({ error: "Chave de idempotência inválida." }, 400);
+  if (!itensRecebidos.length) return json({ error: "Adicione ao menos um produto à carga." }, 400);
+
+  const itens = itensRecebidos.map(item => ({ produtoId: Number(item?.produto_id || 0), quantidade: Number(item?.quantidade) }));
+  if (itens.some(item => !Number.isInteger(item.produtoId) || item.produtoId <= 0)) return json({ error: "Todos os itens devem possuir produto válido." }, 400);
+  if (itens.some(item => !Number.isInteger(item.quantidade) || item.quantidade <= 0)) return json({ error: "A quantidade deve ser um número inteiro de fardos maior que zero." }, 400);
+  if (new Set(itens.map(item => item.produtoId)).size !== itens.length) return json({ error: "O mesmo produto não pode aparecer duas vezes na carga." }, 400);
+
+  const [central, vendedor] = await Promise.all([
+    obterEstoqueCentral(env),
+    env.DB.prepare("SELECT id, nome FROM vendedores WHERE id = ? AND role = 'vendedor' AND status = 'ativo'").bind(vendedorId).first(),
+  ]);
+  if (!central) return json({ error: "Estoque Central ainda não foi inicializado." }, 409);
+  if (!vendedor) return json({ error: "Vendedor ativo não encontrado." }, 404);
+
+  const chave = chaveTransferenciaCarga(chaveCliente);
+  const observacoesAbertura = `AUDITORIA_FISICA_CONFIRMADA${observacao ? ` | ${observacao}` : ""}`;
+  const esperado = { vendedorId, dataCarga, auditorId: Number(user.vendedorId), observacoesAbertura, itens };
+  const existente = await carregarCargaPorChave(env, chave);
+  if (existente) {
+    const validacao = validarCargaExistente(existente, esperado);
+    if (validacao) return respostaConflitoCarga(validacao, existente);
+    return json({ success: true, idempotente: true, carga: existente });
+  }
+
+  const produtos = await Promise.all(itens.map(item => env.DB.prepare(`
+    SELECT p.id, p.nome, COALESCE(SUM(m.quantidade * m.efeito), 0) AS saldo_atual
+    FROM produtos p
+    LEFT JOIN estoque_movimentacoes m ON m.produto_id = p.id AND m.local_id = ?
+    WHERE p.id = ? AND p.ativo = 'ativo'
+    GROUP BY p.id, p.nome
+  `).bind(central.id, item.produtoId).first()));
+  if (produtos.some(produto => !produto)) return json({ error: "Todos os produtos devem existir e estar ativos." }, 409);
+  const indiceInsuficiente = itens.findIndex((item, indice) => item.quantidade > Number(produtos[indice].saldo_atual || 0));
+  if (indiceInsuficiente >= 0) return json({
+    error: `Saldo insuficiente para ${produtos[indiceInsuficiente].nome}.`,
+    produto_id: itens[indiceInsuficiente].produtoId,
+    saldo_disponivel: Number(produtos[indiceInsuficiente].saldo_atual || 0),
+  }, 409);
+
+  const cargaAberta = await env.DB.prepare("SELECT id FROM estoque_cargas WHERE vendedor_id = ? AND status = 'ABERTA'").bind(vendedorId).first();
+  if (cargaAberta) return json({ error: "O vendedor já possui uma carga aberta.", carga_id: cargaAberta.id }, 409);
+
+  const statements = [
+    env.DB.prepare(`
+      INSERT OR IGNORE INTO estoque_locais (nome, tipo, vendedor_id, ativo, created_at, updated_at)
+      SELECT 'CARGA - ' || nome, 'CARGA_VENDEDOR', id, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      FROM vendedores WHERE id = ? AND role = 'vendedor' AND status = 'ativo'
+    `).bind(vendedorId),
+    env.DB.prepare(`
+      INSERT INTO estoque_cargas (data_carga, vendedor_id, local_carga_id, status,
+        aberta_em, aberta_por, observacoes_abertura, created_at, updated_at)
+      SELECT ?, vendedor.id, local.id, 'ABERTA', CURRENT_TIMESTAMP, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      FROM vendedores vendedor
+      INNER JOIN estoque_locais local ON local.vendedor_id = vendedor.id
+        AND local.tipo = 'CARGA_VENDEDOR' AND local.ativo = 1
+      WHERE vendedor.id = ? AND vendedor.role = 'vendedor' AND vendedor.status = 'ativo'
+    `).bind(dataCarga, user.vendedorId, observacoesAbertura, vendedorId),
+  ];
+  for (const item of itens) statements.push(env.DB.prepare(`
+    INSERT INTO estoque_carga_itens (carga_id, produto_id, quantidade_carregada, observacao, created_at, updated_at)
+    SELECT carga.id, produto.id, ?, 'Conferido fisicamente na abertura', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+    FROM estoque_cargas carga
+    INNER JOIN produtos produto ON produto.id = ? AND produto.ativo = 'ativo'
+    WHERE carga.vendedor_id = ? AND carga.data_carga = ? AND carga.status = 'ABERTA'
+  `).bind(item.quantidade, item.produtoId, vendedorId, dataCarga));
+  statements.push(env.DB.prepare(`
+    INSERT INTO estoque_operacoes (tipo, status, data_operacao, origem_tipo, origem_id,
+      chave_idempotencia, operacao_estornada_id, usuario_id, observacao, created_at)
+    SELECT 'TRANSFERENCIA_CARGA', 'CONFIRMADA', carga.data_carga, 'CARGA', carga.id,
+      ?, NULL, ?, 'Carga conferida fisicamente por ' || ?, CURRENT_TIMESTAMP
+    FROM estoque_cargas carga
+    WHERE carga.vendedor_id = ? AND carga.data_carga = ? AND carga.status = 'ABERTA'
+  `).bind(chave, user.vendedorId, user.nome, vendedorId, dataCarga));
+
+  for (const item of itens) statements.push(
+    env.DB.prepare(`
+      INSERT INTO estoque_movimentacoes (operacao_id, local_id, produto_id, carga_id, carga_item_id,
+        visita_id, visita_item_id, quantidade, efeito, created_at)
+      VALUES (
+        COALESCE((SELECT id FROM estoque_operacoes WHERE chave_idempotencia = ?), 0), ?, ?,
+        COALESCE((SELECT id FROM estoque_cargas WHERE vendedor_id = ? AND data_carga = ? AND status = 'ABERTA'), 0),
+        COALESCE((SELECT item.id FROM estoque_carga_itens item INNER JOIN estoque_cargas carga ON carga.id = item.carga_id
+          WHERE carga.vendedor_id = ? AND carga.data_carga = ? AND carga.status = 'ABERTA' AND item.produto_id = ?), 0),
+        NULL, NULL,
+        COALESCE((SELECT ? WHERE ? <= (SELECT COALESCE(SUM(m.quantidade * m.efeito), 0)
+          FROM estoque_movimentacoes m WHERE m.local_id = ? AND m.produto_id = ?)), 0),
+        -1, CURRENT_TIMESTAMP)
+    `).bind(chave, central.id, item.produtoId, vendedorId, dataCarga, vendedorId, dataCarga,
+      item.produtoId, item.quantidade, item.quantidade, central.id, item.produtoId),
+    env.DB.prepare(`
+      INSERT INTO estoque_movimentacoes (operacao_id, local_id, produto_id, carga_id, carga_item_id,
+        visita_id, visita_item_id, quantidade, efeito, created_at)
+      VALUES (
+        COALESCE((SELECT id FROM estoque_operacoes WHERE chave_idempotencia = ?), 0),
+        COALESCE((SELECT id FROM estoque_locais WHERE tipo = 'CARGA_VENDEDOR' AND vendedor_id = ? AND ativo = 1), 0), ?,
+        COALESCE((SELECT id FROM estoque_cargas WHERE vendedor_id = ? AND data_carga = ? AND status = 'ABERTA'), 0),
+        COALESCE((SELECT item.id FROM estoque_carga_itens item INNER JOIN estoque_cargas carga ON carga.id = item.carga_id
+          WHERE carga.vendedor_id = ? AND carga.data_carga = ? AND carga.status = 'ABERTA' AND item.produto_id = ?), 0),
+        NULL, NULL, ?, 1, CURRENT_TIMESTAMP)
+    `).bind(chave, vendedorId, item.produtoId, vendedorId, dataCarga, vendedorId, dataCarga, item.produtoId, item.quantidade)
+  );
+
+  try {
+    await env.DB.batch(statements);
+  } catch (err) {
+    const concorrente = await carregarCargaPorChave(env, chave);
+    if (concorrente) {
+      const validacao = validarCargaExistente(concorrente, esperado);
+      if (validacao) return respostaConflitoCarga(validacao, concorrente);
+      return json({ success: true, idempotente: true, carga: concorrente });
+    }
+    const mensagem = String(err?.message || "");
+    if (mensagem.includes("UNIQUE constraint failed: estoque_cargas")) return json({ error: "O vendedor já possui uma carga aberta ou uma carga válida nesta data." }, 409);
+    if (mensagem.includes("CHECK constraint failed") || mensagem.includes("FOREIGN KEY constraint failed")) return json({ error: "A carga não foi registrada. Confira novamente o saldo disponível e os dados informados." }, 409);
+    throw err;
+  }
+  const carga = await carregarCargaPorChave(env, chave);
+  if (!carga) throw new Error("A transação não confirmou a criação da carga.");
+  const validacaoFinal = validarCargaExistente(carga, esperado);
+  if (validacaoFinal) throw new Error(`Carga criada com estrutura inválida: ${validacaoFinal.mensagem}`);
+  return json({ success: true, idempotente: false, carga }, 201);
+}
+
+function chaveComplementoCarga(cargaId, chaveCliente) {
+  return `COMPLEMENTO_CARGA:${cargaId}:${chaveCliente}`;
+}
+
+function validarComplementoExistente(transferencia, esperado) {
+  if (Number(transferencia.id) !== esperado.cargaId
+    || Number(transferencia.operacao?.usuario_id) !== esperado.auditorId
+    || normalizeText(transferencia.operacao?.observacao) !== esperado.observacaoOperacao) {
+    return { tipo: "DIVERGENTE", mensagem: "A chave de idempotência do complemento já foi usada com dados diferentes." };
+  }
+  if (transferencia.status !== "ABERTA" || transferencia.operacao?.status !== "CONFIRMADA"
+    || transferencia.itens_operacao.length !== esperado.itens.length) {
+    return { tipo: "INCOMPLETA", mensagem: "O complemento existente está estruturalmente incompleto." };
+  }
+  const porProduto = new Map(transferencia.itens_operacao.map(item => [Number(item.produto_id), item]));
+  for (const esperadoItem of esperado.itens) {
+    const item = porProduto.get(esperadoItem.produtoId);
+    if (!item) return { tipo: "INCOMPLETA", mensagem: "O complemento não possui todos os produtos esperados." };
+    if (Number(item.saidas_central) !== 1 || Number(item.entradas_carga) !== 1
+      || Number(item.quantidade_saida) !== esperadoItem.quantidade
+      || Number(item.quantidade_entrada) !== esperadoItem.quantidade) {
+      return { tipo: "DIVERGENTE", mensagem: "O complemento existente possui quantidades diferentes." };
+    }
+  }
+  return null;
+}
+
+async function registrarComplementoCarga(request, env, user, cargaId) {
+  if (!acessoCargaPermitido(user)) return acessoNegado();
+  if (!Number.isInteger(cargaId) || cargaId <= 0) return json({ error: "Carga inválida." }, 400);
+  const dados = await request.json();
+  const chaveCliente = normalizeText(dados.chave_idempotencia);
+  const observacao = normalizeText(dados.observacao);
+  const itensRecebidos = Array.isArray(dados.itens) ? dados.itens : [];
+  if (dados.confirmacao_auditoria !== true) return json({ error: "Confirme que o complemento foi conferido fisicamente." }, 400);
+  if (!chaveCliente || chaveCliente.length > 120) return json({ error: "Chave de idempotência inválida." }, 400);
+  if (!itensRecebidos.length) return json({ error: "Adicione ao menos um produto ao complemento." }, 400);
+  const itens = itensRecebidos.map(item => ({ produtoId: Number(item?.produto_id || 0), quantidade: Number(item?.quantidade) }));
+  if (itens.some(item => !Number.isInteger(item.produtoId) || item.produtoId <= 0)) return json({ error: "Todos os itens devem possuir produto válido." }, 400);
+  if (itens.some(item => !Number.isInteger(item.quantidade) || item.quantidade <= 0)) return json({ error: "A quantidade complementar deve ser um número inteiro de fardos maior que zero." }, 400);
+  if (new Set(itens.map(item => item.produtoId)).size !== itens.length) return json({ error: "O mesmo produto não pode aparecer duas vezes no complemento." }, 400);
+
+  const [carga, central] = await Promise.all([carregarCargaCompleta(env, cargaId), obterEstoqueCentral(env)]);
+  if (!carga) return json({ error: "Carga não encontrada." }, 404);
+  if (carga.status !== "ABERTA") return json({ error: "Somente cargas abertas podem receber complementos." }, 409);
+  if (!central) return json({ error: "Estoque Central ainda não foi inicializado." }, 409);
+  const chave = chaveComplementoCarga(cargaId, chaveCliente);
+  const observacaoOperacao = `COMPLEMENTO_AUDITADO por ${user.nome}${observacao ? ` | ${observacao}` : ""}`;
+  const esperado = { cargaId, auditorId: Number(user.vendedorId), observacaoOperacao, itens };
+  const existente = await carregarTransferenciaCargaPorChave(env, chave);
+  if (existente) {
+    const validacao = validarComplementoExistente(existente, esperado);
+    if (validacao) return respostaConflitoCarga(validacao, existente);
+    return json({ success: true, idempotente: true, carga: existente });
+  }
+
+  const produtos = await Promise.all(itens.map(item => env.DB.prepare(`
+    SELECT produto.id, produto.nome,
+      COALESCE(SUM(movimento.quantidade * movimento.efeito), 0) AS saldo_atual
+    FROM produtos produto
+    LEFT JOIN estoque_movimentacoes movimento
+      ON movimento.produto_id = produto.id AND movimento.local_id = ?
+    WHERE produto.id = ? AND produto.ativo = 'ativo'
+    GROUP BY produto.id, produto.nome
+  `).bind(central.id, item.produtoId).first()));
+  if (produtos.some(produto => !produto)) return json({ error: "Todos os produtos devem existir e estar ativos." }, 409);
+  const indiceInsuficiente = itens.findIndex((item, indice) => item.quantidade > Number(produtos[indice].saldo_atual || 0));
+  if (indiceInsuficiente >= 0) return json({
+    error: `Saldo insuficiente para ${produtos[indiceInsuficiente].nome}.`,
+    produto_id: itens[indiceInsuficiente].produtoId,
+    saldo_disponivel: Number(produtos[indiceInsuficiente].saldo_atual || 0),
+  }, 409);
+
+  const statements = [];
+  for (const item of itens) statements.push(
+    env.DB.prepare(`
+      UPDATE estoque_carga_itens
+      SET quantidade_carregada = quantidade_carregada + ?, updated_at = CURRENT_TIMESTAMP
+      WHERE carga_id = ? AND produto_id = ?
+        AND EXISTS (SELECT 1 FROM produtos WHERE id = ? AND ativo = 'ativo')
+        AND EXISTS (SELECT 1 FROM estoque_cargas WHERE id = ? AND status = 'ABERTA')
+    `).bind(item.quantidade, cargaId, item.produtoId, item.produtoId, cargaId),
+    env.DB.prepare(`
+      INSERT INTO estoque_carga_itens (
+        carga_id, produto_id, quantidade_carregada, observacao, created_at, updated_at
+      )
+      SELECT carga.id, produto.id, ?,
+        'Adicionado em complemento auditado', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      FROM estoque_cargas carga
+      INNER JOIN produtos produto ON produto.id = ? AND produto.ativo = 'ativo'
+      WHERE carga.id = ? AND carga.status = 'ABERTA'
+        AND NOT EXISTS (
+          SELECT 1 FROM estoque_carga_itens item
+          WHERE item.carga_id = carga.id AND item.produto_id = produto.id
+        )
+    `).bind(item.quantidade, item.produtoId, cargaId)
+  );
+  statements.push(env.DB.prepare(`
+    INSERT INTO estoque_operacoes (
+      tipo, status, data_operacao, origem_tipo, origem_id,
+      chave_idempotencia, operacao_estornada_id, usuario_id, observacao, created_at
+    )
+    SELECT 'TRANSFERENCIA_CARGA', 'CONFIRMADA', carga.data_carga,
+      'CARGA', carga.id, ?, NULL, ?, ?, CURRENT_TIMESTAMP
+    FROM estoque_cargas carga WHERE carga.id = ? AND carga.status = 'ABERTA'
+  `).bind(chave, user.vendedorId, observacaoOperacao, cargaId));
+  for (const item of itens) statements.push(
+    env.DB.prepare(`
+      INSERT INTO estoque_movimentacoes (
+        operacao_id, local_id, produto_id, carga_id, carga_item_id,
+        visita_id, visita_item_id, quantidade, efeito, created_at
+      ) VALUES (
+        COALESCE((SELECT id FROM estoque_operacoes WHERE chave_idempotencia = ?), 0),
+        ?, ?, ?,
+        COALESCE((SELECT id FROM estoque_carga_itens WHERE carga_id = ? AND produto_id = ?), 0),
+        NULL, NULL,
+        COALESCE((SELECT ? WHERE ? <= (
+          SELECT COALESCE(SUM(movimento.quantidade * movimento.efeito), 0)
+          FROM estoque_movimentacoes movimento
+          WHERE movimento.local_id = ? AND movimento.produto_id = ?
+        )), 0), -1, CURRENT_TIMESTAMP
+      )
+    `).bind(chave, central.id, item.produtoId, cargaId, cargaId, item.produtoId,
+      item.quantidade, item.quantidade, central.id, item.produtoId),
+    env.DB.prepare(`
+      INSERT INTO estoque_movimentacoes (
+        operacao_id, local_id, produto_id, carga_id, carga_item_id,
+        visita_id, visita_item_id, quantidade, efeito, created_at
+      ) VALUES (
+        COALESCE((SELECT id FROM estoque_operacoes WHERE chave_idempotencia = ?), 0),
+        ?, ?, ?,
+        COALESCE((SELECT id FROM estoque_carga_itens WHERE carga_id = ? AND produto_id = ?), 0),
+        NULL, NULL, ?, 1, CURRENT_TIMESTAMP
+      )
+    `).bind(chave, carga.local_carga_id, item.produtoId, cargaId, cargaId, item.produtoId, item.quantidade)
+  );
+  try {
+    await env.DB.batch(statements);
+  } catch (err) {
+    const concorrente = await carregarTransferenciaCargaPorChave(env, chave);
+    if (concorrente) {
+      const validacao = validarComplementoExistente(concorrente, esperado);
+      if (validacao) return respostaConflitoCarga(validacao, concorrente);
+      return json({ success: true, idempotente: true, carga: concorrente });
+    }
+    const mensagem = String(err?.message || "");
+    if (mensagem.includes("CHECK constraint failed") || mensagem.includes("FOREIGN KEY constraint failed")) {
+      return json({ error: "O complemento não foi registrado. Confira o status da carga e o saldo disponível." }, 409);
+    }
+    throw err;
+  }
+  const transferencia = await carregarTransferenciaCargaPorChave(env, chave);
+  if (!transferencia) throw new Error("A transação não confirmou o complemento da carga.");
+  const validacaoFinal = validarComplementoExistente(transferencia, esperado);
+  if (validacaoFinal) throw new Error(`Complemento criado com estrutura inválida: ${validacaoFinal.mensagem}`);
+  return json({ success: true, idempotente: false, carga: transferencia }, 201);
+}
+
+function validarEstruturaCancelamento(carga) {
+  const transferencias = carga.operacoes.filter(operacao => operacao.tipo === "TRANSFERENCIA_CARGA");
+  if (!transferencias.length) return { mensagem: "A carga não possui transferências para estornar." };
+  const totaisTransferidos = new Map();
+  for (const operacao of transferencias) {
+    const porProduto = new Map();
+    for (const movimento of operacao.movimentacoes) {
+      if (Number(movimento.carga_id) !== Number(carga.id) || !movimento.carga_item_id) {
+        return { mensagem: `A operação #${operacao.id} possui vínculo inválido com a carga.` };
+      }
+      const produtoId = Number(movimento.produto_id);
+      if (!porProduto.has(produtoId)) porProduto.set(produtoId, { central: [], carga: [] });
+      if (movimento.local_tipo === "CENTRAL" && Number(movimento.efeito) === -1) porProduto.get(produtoId).central.push(movimento);
+      if (Number(movimento.local_id) === Number(carga.local_carga_id) && Number(movimento.efeito) === 1) porProduto.get(produtoId).carga.push(movimento);
+    }
+    if (!porProduto.size || operacao.movimentacoes.length !== porProduto.size * 2) return { mensagem: `A operação #${operacao.id} possui movimentos inesperados.` };
+    for (const movimentos of porProduto.values()) {
+      if (movimentos.central.length !== 1 || movimentos.carga.length !== 1
+        || Number(movimentos.central[0].quantidade) !== Number(movimentos.carga[0].quantidade)) {
+        return { mensagem: `A operação #${operacao.id} não forma uma transferência íntegra.` };
+      }
+      const movimentoCarga = movimentos.carga[0];
+      totaisTransferidos.set(Number(movimentoCarga.produto_id),
+        (totaisTransferidos.get(Number(movimentoCarga.produto_id)) || 0) + Number(movimentoCarga.quantidade));
+    }
+  }
+  if (carga.itens.length !== totaisTransferidos.size) return { mensagem: "Os itens acumulados não correspondem aos produtos transferidos." };
+  for (const item of carga.itens) {
+    if (Number(item.quantidade_carregada) !== Number(totaisTransferidos.get(Number(item.produto_id)) || 0)) {
+      return { mensagem: `A quantidade acumulada do produto #${item.produto_id} não corresponde às transferências.` };
+    }
+  }
+  return null;
+}
+
+function validarCancelamentoConcluido(carga) {
+  if (carga.status !== "CANCELADA") return { mensagem: "A carga não está cancelada." };
+  const transferencias = carga.operacoes.filter(operacao => operacao.tipo === "TRANSFERENCIA_CARGA");
+  const estornos = carga.operacoes.filter(operacao => operacao.tipo === "ESTORNO");
+  if (!transferencias.length || estornos.length !== transferencias.length) return { mensagem: "A quantidade de estornos não corresponde às transferências." };
+  for (const original of transferencias) {
+    const correspondentes = estornos.filter(estorno => Number(estorno.operacao_estornada_id) === Number(original.id));
+    if (original.status !== "ESTORNADA" || correspondentes.length !== 1 || correspondentes[0].status !== "CONFIRMADA") return { mensagem: `A operação #${original.id} não possui estorno íntegro.` };
+    const estorno = correspondentes[0];
+    if (estorno.movimentacoes.length !== original.movimentacoes.length) return { mensagem: `O estorno da operação #${original.id} está incompleto.` };
+    for (const movimento of original.movimentacoes) {
+      const inverso = estorno.movimentacoes.find(item => Number(item.local_id) === Number(movimento.local_id)
+        && Number(item.produto_id) === Number(movimento.produto_id)
+        && Number(item.quantidade) === Number(movimento.quantidade)
+        && Number(item.efeito) === -Number(movimento.efeito));
+      if (!inverso) return { mensagem: `O estorno da operação #${original.id} não contém todos os movimentos inversos.` };
+    }
+  }
+  return null;
+}
+
+async function cancelarCargaVendedor(request, env, user, cargaId) {
+  if (!acessoCargaPermitido(user)) return acessoNegado();
+  if (!Number.isInteger(cargaId) || cargaId <= 0) return json({ error: "Carga inválida." }, 400);
+  const dados = await request.json();
+  const motivo = normalizeText(dados.motivo_cancelamento);
+  if (!motivo) return json({ error: "Informe o motivo do cancelamento." }, 400);
+  if (motivo.length > 500) return json({ error: "O motivo do cancelamento é muito longo." }, 400);
+  if (dados.confirmacao_cancelamento !== true) return json({ error: "Confirme explicitamente o cancelamento integral da carga." }, 400);
+  let carga = await carregarCargaCompleta(env, cargaId);
+  if (!carga) return json({ error: "Carga não encontrada." }, 404);
+  if (carga.status === "CANCELADA") {
+    if (normalizeText(carga.motivo_cancelamento) !== motivo) return json({ error: "A carga já foi cancelada com outro motivo." }, 409);
+    const validacao = validarCancelamentoConcluido(carga);
+    if (validacao) return json({ error: "O cancelamento existente está incompleto. Solicite auditoria.", detalhe: validacao.mensagem }, 409);
+    return json({ success: true, idempotente: true, carga });
+  }
+  if (carga.status !== "ABERTA") return json({ error: "Somente cargas abertas podem ser canceladas." }, 409);
+  const estrutura = validarEstruturaCancelamento(carga);
+  if (estrutura) return json({ error: "A carga possui estrutura inconsistente. Solicite auditoria.", detalhe: estrutura.mensagem }, 409);
+  const transferencias = carga.operacoes.filter(operacao => operacao.tipo === "TRANSFERENCIA_CARGA");
+  const estornosExistentes = carga.operacoes.filter(operacao => operacao.tipo === "ESTORNO");
+  if (estornosExistentes.length || transferencias.some(operacao => operacao.status !== "CONFIRMADA")) {
+    return json({ error: "A carga possui cancelamento parcial. Solicite auditoria." }, 409);
+  }
+
+  const totaisPorProduto = new Map();
+  for (const operacao of transferencias) for (const movimento of operacao.movimentacoes) {
+    if (Number(movimento.local_id) === Number(carga.local_carga_id) && Number(movimento.efeito) === 1) {
+      totaisPorProduto.set(Number(movimento.produto_id), (totaisPorProduto.get(Number(movimento.produto_id)) || 0) + Number(movimento.quantidade));
+    }
+  }
+  for (const [produtoId, quantidade] of totaisPorProduto) {
+    const saldo = await env.DB.prepare(`
+      SELECT COALESCE(SUM(quantidade * efeito), 0) AS saldo
+      FROM estoque_movimentacoes WHERE local_id = ? AND produto_id = ?
+    `).bind(carga.local_carga_id, produtoId).first();
+    if (Number(saldo?.saldo || 0) < quantidade) return json({
+      error: "O local do vendedor não possui saldo suficiente para o estorno integral.",
+      produto_id: produtoId, saldo_disponivel: Number(saldo?.saldo || 0), quantidade_estorno: quantidade,
+    }, 409);
+  }
+
+  const quantidadeTransferenciasSnapshot = transferencias.length;
+  const maiorTransferenciaIdSnapshot = Math.max(...transferencias.map(operacao => Number(operacao.id)));
+  const statements = [env.DB.prepare(`
+    UPDATE estoque_cargas
+    SET status = 'CANCELADA', cancelada_em = CURRENT_TIMESTAMP,
+      cancelada_por = ?, motivo_cancelamento = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND status = 'ABERTA'
+      AND (
+        SELECT COUNT(*) FROM estoque_operacoes operacao
+        WHERE operacao.tipo = 'TRANSFERENCIA_CARGA'
+          AND operacao.origem_tipo = 'CARGA' AND operacao.origem_id = estoque_cargas.id
+      ) = ?
+      AND COALESCE((
+        SELECT MAX(operacao.id) FROM estoque_operacoes operacao
+        WHERE operacao.tipo = 'TRANSFERENCIA_CARGA'
+          AND operacao.origem_tipo = 'CARGA' AND operacao.origem_id = estoque_cargas.id
+      ), 0) = ?
+  `).bind(
+    user.vendedorId, motivo, cargaId,
+    quantidadeTransferenciasSnapshot, maiorTransferenciaIdSnapshot
+  )];
+  for (const original of transferencias) {
+    const chaveEstorno = `ESTORNO_CARGA:${cargaId}:OPERACAO:${original.id}`;
+    statements.push(env.DB.prepare(`
+      INSERT INTO estoque_operacoes (
+        tipo, status, data_operacao, origem_tipo, origem_id,
+        chave_idempotencia, operacao_estornada_id, usuario_id, observacao, created_at
+      )
+      SELECT 'ESTORNO', 'CONFIRMADA', carga.data_carga, 'CARGA', carga.id,
+        ?, ?, ?, ?, CURRENT_TIMESTAMP
+      FROM estoque_cargas carga
+      WHERE carga.id = ? AND carga.status = 'CANCELADA'
+        AND carga.cancelada_por = ? AND carga.motivo_cancelamento = ?
+    `).bind(
+      chaveEstorno, original.id, user.vendedorId,
+      `Cancelamento da carga #${cargaId}: ${motivo}`,
+      cargaId, user.vendedorId, motivo
+    ));
+    for (const movimento of original.movimentacoes) {
+      const quantidadeProtegida = Number(movimento.local_id) === Number(carga.local_carga_id) && Number(movimento.efeito) === 1;
+      statements.push(env.DB.prepare(`
+        INSERT INTO estoque_movimentacoes (
+          operacao_id, local_id, produto_id, carga_id, carga_item_id,
+          visita_id, visita_item_id, quantidade, efeito, created_at
+        ) VALUES (
+          COALESCE((SELECT id FROM estoque_operacoes WHERE chave_idempotencia = ?), 0),
+          ?, ?, ?, ?, NULL, NULL,
+          ${quantidadeProtegida ? `COALESCE((SELECT ? WHERE ? <= (
+            SELECT COALESCE(SUM(quantidade * efeito), 0) FROM estoque_movimentacoes
+            WHERE local_id = ? AND produto_id = ?
+          )), 0)` : "?"},
+          ?, CURRENT_TIMESTAMP
+        )
+      `).bind(...(quantidadeProtegida
+        ? [chaveEstorno, movimento.local_id, movimento.produto_id, cargaId, movimento.carga_item_id,
+          movimento.quantidade, movimento.quantidade, movimento.local_id, movimento.produto_id, -Number(movimento.efeito)]
+        : [chaveEstorno, movimento.local_id, movimento.produto_id, cargaId, movimento.carga_item_id,
+          movimento.quantidade, -Number(movimento.efeito)])));
+    }
+    statements.push(env.DB.prepare(`
+      UPDATE estoque_operacoes SET status = 'ESTORNADA'
+      WHERE id = ? AND status = 'CONFIRMADA'
+        AND EXISTS (
+          SELECT 1 FROM estoque_cargas carga
+          WHERE carga.id = ? AND carga.status = 'CANCELADA'
+            AND carga.cancelada_por = ? AND carga.motivo_cancelamento = ?
+        )
+    `).bind(original.id, cargaId, user.vendedorId, motivo));
+  }
+
+  try {
+    await env.DB.batch(statements);
+  } catch (err) {
+    carga = await carregarCargaCompleta(env, cargaId);
+    if (carga?.status === "CANCELADA") {
+      if (normalizeText(carga.motivo_cancelamento) !== motivo) return json({ error: "A carga já foi cancelada com outro motivo." }, 409);
+      const validacao = validarCancelamentoConcluido(carga);
+      if (validacao) return json({ error: "O cancelamento existente está incompleto. Solicite auditoria.", detalhe: validacao.mensagem }, 409);
+      return json({ success: true, idempotente: true, carga });
+    }
+    const mensagem = String(err?.message || "");
+    if (mensagem.includes("CHECK constraint failed") || mensagem.includes("FOREIGN KEY constraint failed")) return json({ error: "O cancelamento não foi concluído. Confira o saldo do local do vendedor." }, 409);
+    throw err;
+  }
+  carga = await carregarCargaCompleta(env, cargaId);
+  const validacaoFinal = carga ? validarCancelamentoConcluido(carga) : { mensagem: "Carga não encontrada após a transação." };
+  if (validacaoFinal) throw new Error(`Cancelamento criado com estrutura inválida: ${validacaoFinal.mensagem}`);
+  return json({ success: true, idempotente: false, carga });
+}
+
+async function listarCargasVendedor(request, env, user) {
+  if (!acessoCargaPermitido(user)) return acessoNegado();
+  const url = new URL(request.url), vendedorId = Number(url.searchParams.get("vendedor_id") || 0);
+  const dataInicial = normalizeText(url.searchParams.get("data_inicial")), dataFinal = normalizeText(url.searchParams.get("data_final"));
+  if (vendedorId && (!Number.isInteger(vendedorId) || vendedorId <= 0)) return json({ error: "Vendedor inválido." }, 400);
+  if (dataInicial && !dataOperacionalValida(dataInicial)) return json({ error: "Data inicial inválida." }, 400);
+  if (dataFinal && !dataOperacionalValida(dataFinal)) return json({ error: "Data final inválida." }, 400);
+  if (dataInicial && dataFinal && dataInicial > dataFinal) return json({ error: "Período inválido." }, 400);
+  const filtros = ["1 = 1"], parametros = [];
+  if (vendedorId) { filtros.push("carga.vendedor_id = ?"); parametros.push(vendedorId); }
+  if (dataInicial) { filtros.push("carga.data_carga >= ?"); parametros.push(dataInicial); }
+  if (dataFinal) { filtros.push("carga.data_carga <= ?"); parametros.push(dataFinal); }
+  const resultado = await env.DB.prepare(`
+    SELECT carga.id, carga.data_carga, carga.vendedor_id, vendedor.nome AS vendedor_nome,
+      carga.status, carga.aberta_em, carga.aberta_por, auditor.nome AS auditor_nome,
+      COUNT(item.id) AS total_produtos, COALESCE(SUM(item.quantidade_carregada), 0) AS total_fardos
+    FROM estoque_cargas carga
+    INNER JOIN vendedores vendedor ON vendedor.id = carga.vendedor_id
+    LEFT JOIN vendedores auditor ON auditor.id = carga.aberta_por
+    LEFT JOIN estoque_carga_itens item ON item.carga_id = carga.id
+    WHERE ${filtros.join(" AND ")}
+    GROUP BY carga.id, vendedor.nome, auditor.nome
+    ORDER BY carga.data_carga DESC, carga.id DESC LIMIT 500
+  `).bind(...parametros).all();
+  return json(resultado.results || []);
+}
+
+async function obterCargaVendedor(env, user, cargaId) {
+  if (!acessoCargaPermitido(user)) return acessoNegado();
+  if (!Number.isInteger(cargaId) || cargaId <= 0) return json({ error: "Carga inválida." }, 400);
+  const carga = await carregarCargaCompleta(env, cargaId);
+  if (!carga) return json({ error: "Carga não encontrada." }, 404);
+  return json(carga);
+}
+
 async function listarVendedores(env, user) {
   if (user.role !== "admin") {
     return json({ error: "Acesso restrito ao administrador" }, 403);
@@ -1813,6 +3333,22 @@ if (url.pathname === "/api/sync" && request.method === "POST") {
     if (/^\/api\/producao\/parametros\/\d+$/.test(url.pathname) && request.method === "PUT") {
       return salvarParametroProducao(request, env, user, Number(url.pathname.split("/").pop()));
     }
+    if (url.pathname === "/api/producao/receitas-base" && request.method === "GET") return listarReceitasBaseProducao(env, user);
+    if (url.pathname === "/api/producao/lotes/abertura" && request.method === "POST") return await abrirLoteProducaoV11(request, env, user);
+    if (/^\/api\/producao\/lotes\/\d+\/produtos$/.test(url.pathname) && request.method === "POST") {
+      return await incluirProdutoLoteV11(request, env, user, Number(url.pathname.split("/")[4]));
+    }
+    if (/^\/api\/producao\/lotes\/\d+\/lancamentos$/.test(url.pathname) && request.method === "POST") {
+      return await registrarLancamentoLoteV11(request, env, user, Number(url.pathname.split("/")[4]));
+    }
+    if (/^\/api\/producao\/lotes\/\d+\/encerramento$/.test(url.pathname) && request.method === "POST") {
+      return await encerrarLoteProducaoV11(request, env, user, Number(url.pathname.split("/")[4]));
+    }
+    if (url.pathname === "/api/producao/lotes" && request.method === "POST") return registrarLoteProducao(request, env, user);
+    if (url.pathname === "/api/producao/lotes" && request.method === "GET") return listarLotesProducao(request, env, user);
+    if (/^\/api\/producao\/lotes\/\d+$/.test(url.pathname) && request.method === "GET") {
+      return obterLoteProducao(env, user, Number(url.pathname.split("/").pop()));
+    }
     if (url.pathname === "/api/producao/registros" && request.method === "GET") return listarRegistrosProducao(request, env, user);
     if (url.pathname === "/api/producao/registros" && request.method === "POST") return registrarProducao(request, env, user);
     if (url.pathname === "/api/estoque/central" && request.method === "GET") return consultarEstoqueCentral(env, user);
@@ -1821,6 +3357,18 @@ if (url.pathname === "/api/sync" && request.method === "POST") {
     if (url.pathname === "/api/estoque/inventario-inicial" && request.method === "POST") return registrarInventarioInicial(request, env, user);
     if (url.pathname === "/api/estoque/entradas" && request.method === "POST") return registrarEntradaEstoque(request, env, user);
     if (url.pathname === "/api/estoque/ajustes" && request.method === "POST") return registrarAjusteEstoque(request, env, user);
+    if (url.pathname === "/api/estoque/cargas/vendedores" && request.method === "GET") return listarVendedoresCarga(env, user);
+    if (url.pathname === "/api/estoque/cargas" && request.method === "POST") return registrarCargaVendedor(request, env, user);
+    if (url.pathname === "/api/estoque/cargas" && request.method === "GET") return listarCargasVendedor(request, env, user);
+    if (/^\/api\/estoque\/cargas\/\d+\/complementos$/.test(url.pathname) && request.method === "POST") {
+      return registrarComplementoCarga(request, env, user, Number(url.pathname.split("/")[4]));
+    }
+    if (/^\/api\/estoque\/cargas\/\d+\/cancelamento$/.test(url.pathname) && request.method === "POST") {
+      return cancelarCargaVendedor(request, env, user, Number(url.pathname.split("/")[4]));
+    }
+    if (/^\/api\/estoque\/cargas\/\d+$/.test(url.pathname) && request.method === "GET") {
+      return obterCargaVendedor(env, user, Number(url.pathname.split("/").pop()));
+    }
     if (url.pathname === "/api/visitas" && request.method === "GET") return listarVisitas(request, env, user);
     if (url.pathname === "/api/visitas" && request.method === "POST") return criarVenda(request, env, user);
     if (url.pathname.startsWith("/api/admin/visitas/") && request.method === "PUT") {
