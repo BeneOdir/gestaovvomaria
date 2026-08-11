@@ -67,7 +67,7 @@
       <div><label>Produto</label><select id="filtroProduto"><option value="">Todos</option></select></div>
       <div><label>Período inicial</label><input id="filtroInicio" type="date"></div>
       <div><label>Período final</label><input id="filtroFim" type="date"></div>
-      <div><label>Tipo</label><select id="filtroTipo"><option value="">Todos</option><option>INVENTARIO_INICIAL</option><option>ENTRADA</option><option>ENTRADA_PRODUCAO</option><option>TRANSFERENCIA_CARGA</option><option>ESTORNO</option><option>AJUSTE_ENTRADA</option><option>AJUSTE_SAIDA</option></select></div>
+      <div><label>Tipo</label><select id="filtroTipo"><option value="">Todos</option><option>INVENTARIO_INICIAL</option><option>ENTRADA</option><option>ENTRADA_PRODUCAO</option><option>TRANSFERENCIA_CARGA</option><option>SAIDA_VENDA</option><option>ESTORNO</option><option>AJUSTE_ENTRADA</option><option>AJUSTE_SAIDA</option></select></div>
       <div><label>Usuário</label><select id="filtroUsuario"><option value="">Todos</option></select></div>
     </div>
     <div class="actions"><button id="btnFiltrar" class="secondary">Aplicar filtros</button><button id="btnLimpar" class="muted">Limpar</button></div>
@@ -77,6 +77,11 @@
         <tbody id="historicoBody"><tr><td colspan="8" class="empty">Nenhuma movimentação.</td></tr></tbody>
       </table>
     </div>
+  </section>
+  <section class="panel" id="semBaixa">
+    <h2>Vendas sem baixa de estoque</h2>
+    <p>Conciliação administrativa não cria baixa retroativa. A correção física deve ser registrada por ajuste auditável.</p>
+    <div class="table-wrap"><table><thead><tr><th>Venda</th><th>Data</th><th>Cliente</th><th>Vendedor</th><th>Motivo</th><th>Ação</th></tr></thead><tbody id="semBaixaBody"><tr><td colspan="6" class="empty">Carregando...</td></tr></tbody></table></div>
   </section>
 </main>
 
@@ -111,6 +116,7 @@ document.getElementById("dataOperacao").value=hoje;
 let produtos=[];
 let usuariosHistorico=[];
 let chaveAtual="";
+const chavesConciliacao=new Map();
 
 function escapar(valor){return String(valor??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function formatarQuantidade(valor){return Number(valor||0).toLocaleString("pt-BR",{minimumFractionDigits:0,maximumFractionDigits:3})}
@@ -189,7 +195,7 @@ async function salvarMovimento(event){
 }
 
 function parametrosHistorico(){const p=new URLSearchParams();[["produto_id","filtroProduto"],["data_inicial","filtroInicio"],["data_final","filtroFim"],["tipo","filtroTipo"],["usuario_id","filtroUsuario"]].forEach(([nome,id])=>{const valor=document.getElementById(id).value;if(valor)p.set(nome,valor)});return p.toString()}
-function formatarOrigem(m){if(m.origem_tipo==="PRODUCAO"&&m.origem_id)return`Produção #${Number(m.origem_id)}`;if(m.origem_tipo==="CARGA"&&m.origem_id)return`Carga #${Number(m.origem_id)}`;return m.origem_tipo||"-"}
+function formatarOrigem(m){if(m.origem_tipo==="PRODUCAO"&&m.origem_id)return`Produção #${Number(m.origem_id)}`;if(m.origem_tipo==="CARGA"&&m.origem_id)return`Carga #${Number(m.origem_id)}`;if(m.origem_tipo==="VENDA"&&m.origem_id)return`Venda #${Number(m.origem_id)}`;return m.origem_tipo||"-"}
 async function carregarHistorico(){
   try{
     const dados=await api(`/api/estoque/movimentacoes?${parametrosHistorico()}`);const lista=dados.movimentacoes||[];
@@ -198,6 +204,21 @@ async function carregarHistorico(){
     if(!lista.length){body.innerHTML='<tr><td colspan="8" class="empty">Nenhuma movimentação encontrada.</td></tr>';return}
     body.innerHTML=lista.map(m=>`<tr><td>${escapar(formatarData(m.data_operacao))}</td><td>${escapar(m.produto_nome)}</td><td>${escapar(m.tipo)}</td><td>${escapar(formatarOrigem(m))}</td><td><span class="tag ${Number(m.efeito)===1?'good':'bad'}">${Number(m.efeito)===1?'Entrada':'Saída'}</span></td><td>${formatarQuantidade(m.quantidade)}</td><td>${escapar(m.usuario_nome||`Usuário ${m.usuario_id||'-'}`)}</td><td>${escapar(m.observacao||"")}</td></tr>`).join("")
   }catch(error){setStatus(error.message,"err")}
+}
+
+async function carregarSemBaixa(){
+  const body=document.getElementById("semBaixaBody");
+  try{
+    const vendas=await api("/api/estoque/vendas-sem-baixa");
+    body.innerHTML=vendas.length?vendas.map(v=>`<tr><td>#${Number(v.id)}</td><td>${escapar(formatarData(v.data_visita))}</td><td>${escapar(v.cliente_nome)}</td><td>${escapar(v.vendedor_nome)}</td><td>${escapar(v.estoque_motivo)}</td><td><button class="secondary" data-conciliar="${Number(v.id)}">Conciliar</button></td></tr>`).join(""):'<tr><td colspan="6" class="empty">Nenhuma venda com estoque SEM_BAIXA.</td></tr>';
+    body.querySelectorAll("[data-conciliar]").forEach(botao=>botao.onclick=()=>conciliarSemBaixa(Number(botao.dataset.conciliar)));
+  }catch(error){body.innerHTML=`<tr><td colspan="6" class="empty">${escapar(error.message)}</td></tr>`}
+}
+async function conciliarSemBaixa(id){
+  const motivo=prompt("Informe o motivo obrigatório da conciliação. Nenhuma baixa retroativa será criada:");
+  if(!motivo?.trim())return;
+  if(!chavesConciliacao.has(id))chavesConciliacao.set(id,novaChave());
+  try{const retorno=await api(`/api/estoque/vendas-sem-baixa/${id}/conciliacao`,{method:"POST",body:JSON.stringify({motivo:motivo.trim(),chave_idempotencia:chavesConciliacao.get(id)})});chavesConciliacao.delete(id);await carregarSemBaixa();setStatus(retorno.aviso||"Conciliação registrada.","ok")}catch(error){setStatus(error.message,"err")}
 }
 
 document.querySelectorAll(".estoque-action").forEach(botao=>botao.addEventListener("click",()=>abrirModal(botao.dataset.action)));
@@ -209,7 +230,7 @@ document.getElementById("btnFiltrar").onclick=carregarHistorico;
 document.getElementById("btnLimpar").onclick=()=>{["filtroProduto","filtroInicio","filtroFim","filtroTipo","filtroUsuario"].forEach(id=>document.getElementById(id).value="");carregarHistorico()};
 document.getElementById("btnInicializar").onclick=async()=>{if(!confirm("Criar o local único ESTOQUE CENTRAL?"))return;try{await api("/api/estoque/central/inicializar",{method:"POST",body:"{}"});await carregarEstoque();setStatus("Estoque Central inicializado. Faça a contagem física antes de registrar o inventário.","ok")}catch(error){setStatus(error.message,"err")}};
 
-Promise.all([carregarEstoque(),carregarHistorico()]);
+Promise.all([carregarEstoque(),carregarHistorico(),carregarSemBaixa()]);
 </script>
 </body>
 </html>

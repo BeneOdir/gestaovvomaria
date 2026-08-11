@@ -555,6 +555,8 @@ document.getElementById("data_visita").value = hoje;
 
 let clientes = [];
 let produtos = [];
+const novaChaveVenda=()=>crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(16).slice(2)}`;
+let chaveVendaAtual=novaChaveVenda();
 
 function setStatus(msg, tipo="warn"){
   const el = document.getElementById("statusMsg");
@@ -1410,7 +1412,8 @@ document.getElementById("visitaForm").addEventListener("submit", async event => 
     pagamentos,
     situacao_pagamento: situacao,
     desconto,
-    itens
+    itens,
+    chave_idempotencia: chaveVendaAtual
   };
 
   const botaoSalvar=document.getElementById("btnSalvarVisita");
@@ -1423,7 +1426,7 @@ document.getElementById("visitaForm").addEventListener("submit", async event => 
       body:JSON.stringify(body)
     });
 
-    setStatus("Visita registrada com sucesso.", "ok");
+    setStatus(data.aviso_estoque||"Visita registrada com sucesso.", data.aviso_estoque?"warn":"ok");
 
     const resumo = document.getElementById("resumo");
     resumo.style.display = "block";
@@ -1431,9 +1434,11 @@ document.getElementById("visitaForm").addEventListener("submit", async event => 
       <strong>Registro salvo</strong><br>
       ID: ${data.visita_id}<br>
       Total estimado: ${dinheiro(data.valor_total)}<br>
-      Itens: ${data.itens.length}
+      Itens: ${data.itens.length}<br>
+      Estoque: ${data.estoque_status||"LEGADO"}${data.aviso_estoque?`<br><strong>${data.aviso_estoque}</strong>`:""}
     `;
     mostrarTicket(data);
+    chaveVendaAtual=novaChaveVenda();
 
     const clienteSelecionado = document.getElementById("cliente_id").value;
 

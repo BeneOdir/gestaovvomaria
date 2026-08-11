@@ -599,7 +599,7 @@ async function listarVisitas(request, env, user) {
       FROM visitas v
       LEFT JOIN clientes c ON c.id = v.cliente_id
       LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
-      WHERE v.data_visita = ? AND ${filtroRegistroTeste("v")}
+      WHERE v.data_visita = ? AND v.status_registro = 'ATIVA' AND ${filtroRegistroTeste("v")}
       ORDER BY v.id DESC
     `).bind(data).all();
   } else {
@@ -608,7 +608,7 @@ async function listarVisitas(request, env, user) {
       FROM visitas v
       LEFT JOIN clientes c ON c.id = v.cliente_id
       LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
-      WHERE v.data_visita = ? AND v.vendedor_id = ? AND ${filtroRegistroTeste("v")}
+      WHERE v.data_visita = ? AND v.vendedor_id = ? AND v.status_registro = 'ATIVA' AND ${filtroRegistroTeste("v")}
       ORDER BY v.id DESC
     `).bind(data, user.vendedorId).all();
   }
@@ -629,7 +629,7 @@ async function relatorioDia(request, env, user) {
       SUM(CASE WHEN comprou = 'nao' THEN 1 ELSE 0 END) AS sem_compra,
       COALESCE(SUM(valor_total), 0) AS valor_total
     FROM visitas v
-    WHERE data_visita = ?${filtroVendedor} AND ${filtroRegistroTeste("v")}
+    WHERE data_visita = ?${filtroVendedor} AND v.status_registro = 'ATIVA' AND ${filtroRegistroTeste("v")}
   `).bind(...params).first();
 
   const itens = await env.DB.prepare(`
@@ -637,7 +637,7 @@ async function relatorioDia(request, env, user) {
     FROM visita_itens vi
     INNER JOIN visitas v ON v.id = vi.visita_id
     WHERE v.data_visita = ?${user.role === "admin" ? "" : " AND v.vendedor_id = ?"}
-      AND ${filtroRegistroTeste("v")}
+      AND v.status_registro = 'ATIVA' AND ${filtroRegistroTeste("v")}
     GROUP BY vi.produto_nome
     ORDER BY quantidade DESC
   `).bind(...params).all();
@@ -648,18 +648,117 @@ async function relatorioDia(request, env, user) {
       FROM visitas v
       LEFT JOIN clientes c ON c.id = v.cliente_id
       LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
-      WHERE v.data_visita = ? AND ${filtroRegistroTeste("v")} ORDER BY v.id DESC
+      WHERE v.data_visita = ? AND v.status_registro = 'ATIVA' AND ${filtroRegistroTeste("v")} ORDER BY v.id DESC
     `).bind(data).all()
     : env.DB.prepare(`
       SELECT v.*, c.nome_fantasia, c.razao_social, vd.nome AS vendedor_nome
       FROM visitas v
       LEFT JOIN clientes c ON c.id = v.cliente_id
       LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
-      WHERE v.data_visita = ? AND v.vendedor_id = ? AND ${filtroRegistroTeste("v")} ORDER BY v.id DESC
+      WHERE v.data_visita = ? AND v.vendedor_id = ? AND v.status_registro = 'ATIVA' AND ${filtroRegistroTeste("v")} ORDER BY v.id DESC
     `).bind(data, user.vendedorId).all());
 
   return json({ data, resumo, produtos: itens.results || [], visitas: visitas.results || [] });
 }
+async function hashTexto(texto) {
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(texto));
+  return [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function carregarVendaPorChave(env, chave) {
+  const visita = await env.DB.prepare(`SELECT v.*,
+    COALESCE(c.nome_fantasia, c.razao_social, c.nome_estabelecimento, ca.nome_estabelecimento, 'Consumidor') AS cliente_nome,
+    COALESCE(vd.nome, 'Vendedor') AS vendedor_nome
+    FROM visitas v
+    LEFT JOIN clientes c ON c.id = v.cliente_id
+    LEFT JOIN clientes_avulsos ca ON ca.id = v.cliente_avulso_id
+    LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
+    WHERE v.chave_idempotencia = ?`).bind(chave).first();
+  if (!visita) return null;
+  const [itens, pagamentos] = await Promise.all([
+    env.DB.prepare("SELECT * FROM visita_itens WHERE visita_id = ? ORDER BY item_ordem, id").bind(visita.id).all(),
+    env.DB.prepare("SELECT forma_pagamento AS forma, valor FROM visita_pagamentos WHERE visita_id = ? ORDER BY id").bind(visita.id).all(),
+  ]);
+  return { ...visita, itens: itens.results || [], pagamentos: pagamentos.results || [] };
+}
+
+function respostaVendaSalva(venda, cliente, user, idempotente = false) {
+  const aviso = venda.estoque_status === "SEM_BAIXA"
+    ? (venda.canal_venda === "ROTA" ? "Venda registrada, mas sem baixa no estoque do veículo." : "Venda registrada, mas sem baixa no Estoque Central.")
+    : venda.estoque_status === "DIVERGENTE"
+      ? "Venda registrada com baixa de estoque. O saldo ficou divergente e exige ajuste físico."
+      : null;
+  return { success: true, idempotente, visita_id: venda.id, data_visita: venda.data_visita,
+    canal_venda: venda.canal_venda, created_at: venda.created_at,
+    cliente: cliente?.nome_fantasia || cliente?.razao_social || cliente?.nome_estabelecimento || venda.cliente_nome || "Consumidor",
+    vendedor: venda.vendedor_nome || user.nome || "Vendedor", itens: venda.itens || [],
+    subtotal: (venda.itens || []).reduce((soma, item) => soma + Number(item.subtotal || 0), 0),
+    desconto: Number(venda.desconto || 0), valor_total: Number(venda.valor_total || 0),
+    valor_recebido: Number(venda.valor_recebido || 0), forma_pagamento: venda.forma_pagamento,
+    pagamentos: venda.pagamentos || [], situacao_pagamento: venda.situacao_pagamento,
+    status_registro: venda.status_registro, estoque_status: venda.estoque_status,
+    estoque_motivo: venda.estoque_motivo, aviso_estoque: aviso };
+}
+
+async function alvoEstoqueValido(env, alvo, canalVenda, vendedorId, itens) {
+  if (!alvo) return false;
+  if (canalVenda === "ROTA") {
+    const estrutura = await env.DB.prepare(`SELECT carga.id
+      FROM estoque_cargas carga
+      INNER JOIN estoque_locais local ON local.id = carga.local_carga_id
+      WHERE carga.id = ? AND carga.status = 'ABERTA' AND carga.vendedor_id = ?
+        AND carga.local_carga_id = ? AND local.tipo = 'CARGA_VENDEDOR'
+        AND local.ativo = 1 AND local.vendedor_id = ?`).bind(alvo.carga_id, vendedorId, alvo.local_id, vendedorId).first();
+    if (!estrutura) return false;
+    const cargaItens = await env.DB.prepare("SELECT produto_id FROM estoque_carga_itens WHERE carga_id = ?").bind(alvo.carga_id).all();
+    const produtos = new Set((cargaItens.results || []).map(item => Number(item.produto_id)));
+    return itens.every(item => produtos.has(Number(item.produto_id)));
+  }
+  return !!await env.DB.prepare("SELECT id FROM estoque_locais WHERE id = ? AND tipo = 'CENTRAL' AND ativo = 1")
+    .bind(alvo.local_id).first();
+}
+
+async function auditarBaixaVenda(env, chaveIdempotencia) {
+  const venda = await carregarVendaPorChave(env, chaveIdempotencia);
+  if (!venda) return { mensagem: "Venda não encontrada após o batch." };
+  const operacoes = await env.DB.prepare(`SELECT * FROM estoque_operacoes
+    WHERE tipo = 'SAIDA_VENDA' AND origem_tipo = 'VENDA' AND origem_id = ?`).bind(venda.id).all();
+  if (venda.estoque_status === "NAO_APLICAVEL" || venda.estoque_status === "SEM_BAIXA") {
+    return (operacoes.results || []).length ? { mensagem: "Venda sem baixa possui operação de estoque inesperada." } : null;
+  }
+  if (!["CONFIRMADO", "DIVERGENTE"].includes(venda.estoque_status)) return null;
+  if ((operacoes.results || []).length !== 1) return { mensagem: "A venda não possui exatamente uma SAIDA_VENDA." };
+  const operacao = operacoes.results[0];
+  if (operacao.status !== "CONFIRMADA") return { mensagem: "A SAIDA_VENDA não está confirmada." };
+  const movimentos = await env.DB.prepare(`SELECT m.*, local.tipo AS local_tipo, local.vendedor_id AS local_vendedor_id,
+    carga.vendedor_id AS carga_vendedor_id, carga.local_carga_id
+    FROM estoque_movimentacoes m
+    INNER JOIN estoque_locais local ON local.id = m.local_id
+    LEFT JOIN estoque_cargas carga ON carga.id = m.carga_id
+    WHERE m.operacao_id = ? ORDER BY m.id`).bind(operacao.id).all();
+  if ((movimentos.results || []).length !== venda.itens.length) return { mensagem: "Quantidade de movimentos diferente da quantidade de itens." };
+  for (const item of venda.itens) {
+    const movimento = (movimentos.results || []).find(m => Number(m.visita_item_id) === Number(item.id));
+    if (!movimento || Number(movimento.visita_id) !== Number(venda.id) || Number(movimento.produto_id) !== Number(item.produto_id)
+      || Number(movimento.quantidade) !== Number(item.quantidade) || Number(movimento.efeito) !== -1) {
+      return { mensagem: `Movimento incompatível com o item #${item.id}.` };
+    }
+    if (venda.canal_venda === "ROTA") {
+      const cargaItem = await env.DB.prepare(`SELECT id FROM estoque_carga_itens
+        WHERE id = ? AND carga_id = ? AND produto_id = ?`).bind(movimento.carga_item_id, movimento.carga_id, item.produto_id).first();
+      if (!movimento.carga_id || !cargaItem || movimento.local_tipo !== "CARGA_VENDEDOR"
+        || Number(movimento.local_vendedor_id) !== Number(venda.vendedor_id)
+        || Number(movimento.carga_vendedor_id) !== Number(venda.vendedor_id)
+        || Number(movimento.local_carga_id) !== Number(movimento.local_id)) {
+        return { mensagem: `Vínculo de carga inválido no item #${item.id}.` };
+      }
+    } else if (movimento.local_tipo !== "CENTRAL" || movimento.carga_id || movimento.carga_item_id) {
+      return { mensagem: `Local central inválido no item #${item.id}.` };
+    }
+  }
+  return null;
+}
+
 async function criarVenda(request, env, user) {
   if (!usuarioTemRole(user, "admin", "vendedor", "operacao")) return acessoNegado();
   const d = await request.json();
@@ -670,23 +769,24 @@ async function criarVenda(request, env, user) {
   const comprou = d.comprou === "sim" || d.comprou === true ? "sim" : "nao";
   const observacoes = normalizeText(d.observacoes);
   const desconto = Number(d.desconto || 0);
+  const chaveIdempotencia = normalizeText(d.chave_idempotencia);
   const itensEntrada = Array.isArray(d.itens)
     ? d.itens
     : (Array.isArray(d.produtos) ? d.produtos : []);
 
   if (!canalVenda) return json({ error: "Canal da venda inválido. Use ROTA ou LOJA_FABRICA." }, 400);
+  if (!chaveIdempotencia || chaveIdempotencia.length > 180) return json({ error: "Chave de idempotência inválida." }, 400);
   if (!user?.vendedorId) return json({ error: "Vendedor autenticado não identificado." }, 401);
   if ((!clienteId && !clienteAvulsoId) || (clienteId && clienteAvulsoId)) {
     return json({ error: "Selecione exatamente um cliente cadastrado ou avulso." }, 400);
   }
   if (!Number.isFinite(desconto) || desconto < 0) return json({ error: "Desconto inválido." }, 400);
+  if (comprou !== "sim" && (itensEntrada.length || (Array.isArray(d.pagamentos) && d.pagamentos.length)
+    || desconto !== 0 || Number(d.valor_total || 0) !== 0 || Number(d.valor_recebido || 0) !== 0)) {
+    return json({ error: "Visita sem compra não pode possuir itens, pagamentos, desconto ou valor de venda." }, 400);
+  }
 
-  const cliente = clienteId
-    ? await env.DB.prepare("SELECT id, nome_fantasia, razao_social, nome_estabelecimento FROM clientes WHERE id = ?").bind(clienteId).first()
-    : await env.DB.prepare("SELECT id, nome_estabelecimento FROM clientes_avulsos WHERE id = ?").bind(clienteAvulsoId).first();
-  if (!cliente) return json({ error: "Cliente não encontrado." }, 404);
-
-  const itens = itensEntrada.map(item => {
+  const itens = itensEntrada.map((item, indice) => {
     const quantidade = Number(item.quantidade);
     const precoUnitario = Number(item.preco_unitario);
     return {
@@ -694,7 +794,8 @@ async function criarVenda(request, env, user) {
       produto_nome: normalizeText(item.produto_nome),
       quantidade,
       preco_unitario: precoUnitario,
-      subtotal: quantidade * precoUnitario
+      subtotal: quantidade * precoUnitario,
+      item_ordem: indice + 1
     };
   }).filter(item => item.produto_id || item.produto_nome || item.quantidade || item.preco_unitario);
 
@@ -702,6 +803,8 @@ async function criarVenda(request, env, user) {
   if (itens.some(item => !item.produto_nome || !Number.isFinite(item.quantidade) || item.quantidade <= 0 || !Number.isFinite(item.preco_unitario) || item.preco_unitario < 0)) {
     return json({ error: "Todos os itens devem ter produto, quantidade maior que zero e preço não negativo." }, 400);
   }
+  const produtosMapeados = itens.filter(item => item.produto_id).map(item => item.produto_id);
+  if (new Set(produtosMapeados).size !== produtosMapeados.length) return json({ error: "Não repita o mesmo produto na venda." }, 400);
 
   const subtotal = comprou === "sim" ? itens.reduce((soma, item) => soma + item.subtotal, 0) : 0;
   if (desconto > subtotal) return json({ error: "O desconto não pode superar o subtotal." }, 400);
@@ -729,57 +832,172 @@ async function criarVenda(request, env, user) {
   const formaPagamento = pagamentos.length ? pagamentos.map(p => p.forma).join(" + ") : "não informado";
   const situacaoPagamento = valorTotal === 0 ? "sem_venda" : valorRecebido >= valorTotal ? "pago" : valorRecebido > 0 ? "parcial" : "pendente";
 
-  const visitaRes = await env.DB.prepare(`
-    INSERT INTO visitas (
-      vendedor_id, cliente_id, cliente_avulso_id, data_visita, canal_venda, comprou,
-      valor_total, observacoes, forma_pagamento, valor_recebido, desconto,
-      situacao_pagamento, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-  `).bind(user.vendedorId, clienteId || 0, clienteAvulsoId || null, dataVisita, canalVenda, comprou,
-    valorTotal, observacoes, formaPagamento, valorRecebido, desconto, situacaoPagamento).run();
-  const visitaId = visitaRes.meta.last_row_id;
-
-  try {
-    const gravacoes = [
-      ...itens.map(item => env.DB.prepare(`
-        INSERT INTO visita_itens (visita_id, produto_id, produto_nome, quantidade, preco_unitario, subtotal)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).bind(visitaId, item.produto_id, item.produto_nome, item.quantidade, item.preco_unitario, item.subtotal)),
-      ...pagamentos.map(pagamento => env.DB.prepare(`
-        INSERT INTO visita_pagamentos (visita_id, forma_pagamento, valor, created_at)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-      `).bind(visitaId, pagamento.forma, pagamento.valor))
-    ];
-    if (gravacoes.length) await env.DB.batch(gravacoes);
-  } catch (err) {
-    try {
-      await env.DB.prepare("DELETE FROM visita_pagamentos WHERE visita_id = ?").bind(visitaId).run();
-    } catch {}
-    await env.DB.batch([
-      env.DB.prepare("DELETE FROM visita_itens WHERE visita_id = ?").bind(visitaId),
-      env.DB.prepare("DELETE FROM visitas WHERE id = ?").bind(visitaId)
-    ]);
-    throw err;
+  const conteudoCanonico = JSON.stringify({ vendedor_id: Number(user.vendedorId), cliente_id: clienteId || 0,
+    cliente_avulso_id: clienteAvulsoId || null, data_visita: dataVisita, canal_venda: canalVenda,
+    comprou, observacoes, desconto, itens, pagamentos, situacao_pagamento: situacaoPagamento });
+  const idempotenciaHash = await hashTexto(conteudoCanonico);
+  const existente = await carregarVendaPorChave(env, chaveIdempotencia);
+  if (existente) {
+    if (existente.idempotencia_hash !== idempotenciaHash) return json({ error: "A chave de idempotência já foi usada com dados diferentes." }, 409);
+    const auditoriaExistente = await auditarBaixaVenda(env, chaveIdempotencia);
+    if (auditoriaExistente) return json({ error: "Falha crítica de auditoria da venda existente.", detalhe: auditoriaExistente.mensagem }, 500);
+    return json(respostaVendaSalva(existente, null, user, true));
   }
 
-  if (clienteId) {
-    await env.DB.prepare("UPDATE clientes SET ultima_visita = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-      .bind(dataVisita, clienteId).run();
+  const cliente = clienteId
+    ? await env.DB.prepare("SELECT id, nome_fantasia, razao_social, nome_estabelecimento FROM clientes WHERE id = ?").bind(clienteId).first()
+    : await env.DB.prepare("SELECT id, nome_estabelecimento FROM clientes_avulsos WHERE id = ?").bind(clienteAvulsoId).first();
+  if (!cliente) return json({ error: "Cliente não encontrado." }, 404);
+
+  let alvo = null, estoqueStatus = comprou === "sim" ? "SEM_BAIXA" : "NAO_APLICAVEL", estoqueMotivo = null;
+  if (comprou === "sim" && itens.some(item => !item.produto_id)) estoqueMotivo = "PRODUTO_NAO_MAPEADO";
+  else if (comprou === "sim" && canalVenda === "ROTA") {
+    alvo = await env.DB.prepare(`SELECT carga.id AS carga_id, carga.local_carga_id AS local_id
+      FROM estoque_cargas carga WHERE carga.vendedor_id = ? AND carga.status = 'ABERTA'`).bind(user.vendedorId).first();
+    if (!alvo) estoqueMotivo = "SEM_CARGA_ABERTA";
+    else {
+      const cargaItens = await env.DB.prepare("SELECT produto_id FROM estoque_carga_itens WHERE carga_id = ?").bind(alvo.carga_id).all();
+      const permitidos = new Set((cargaItens.results || []).map(item => Number(item.produto_id)));
+      if (itens.some(item => !permitidos.has(item.produto_id))) { alvo = null; estoqueMotivo = "PRODUTO_FORA_DA_CARGA"; }
+    }
+  } else if (comprou === "sim") {
+    alvo = await env.DB.prepare("SELECT id AS local_id, NULL AS carga_id FROM estoque_locais WHERE tipo = 'CENTRAL' AND ativo = 1").first();
+    if (!alvo) estoqueMotivo = "ESTOQUE_CENTRAL_NAO_INICIALIZADO";
   }
+  if (alvo) { estoqueStatus = "CONFIRMADO"; estoqueMotivo = null; }
 
-  let createdAt = null;
-  try {
-    const vendaSalva = await env.DB.prepare("SELECT created_at FROM visitas WHERE id = ?").bind(visitaId).first();
-    createdAt = vendaSalva?.created_at || null;
-  } catch {}
-
-  return json({
-    success: true, visita_id: visitaId, data_visita: dataVisita, canal_venda: canalVenda, created_at: createdAt,
-    cliente: cliente.nome_fantasia || cliente.razao_social || cliente.nome_estabelecimento || "Consumidor",
-    vendedor: user.nome || "Vendedor", itens, subtotal, desconto,
-    valor_total: valorTotal, valor_recebido: valorRecebido,
-    forma_pagamento: formaPagamento, pagamentos, situacao_pagamento: situacaoPagamento
-  });
+  const chaveOperacao = `VENDA:${chaveIdempotencia}`;
+  const statements = [env.DB.prepare(`INSERT INTO visitas (
+    vendedor_id, cliente_id, cliente_avulso_id, data_visita, canal_venda, comprou,
+    valor_total, observacoes, forma_pagamento, valor_recebido, desconto, situacao_pagamento,
+    chave_idempotencia, idempotencia_hash, status_registro, estoque_status, estoque_motivo, created_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ATIVA', ?, ?, CURRENT_TIMESTAMP)`)
+    .bind(user.vendedorId, clienteId || 0, clienteAvulsoId || null, dataVisita, canalVenda, comprou,
+      valorTotal, observacoes, formaPagamento, valorRecebido, desconto, situacaoPagamento,
+      chaveIdempotencia, idempotenciaHash, estoqueStatus, estoqueMotivo)];
+  for (const item of itens) statements.push(env.DB.prepare(`INSERT INTO visita_itens
+    (visita_id, produto_id, produto_nome, quantidade, preco_unitario, subtotal, item_ordem)
+    SELECT id, ?, ?, ?, ?, ?, ? FROM visitas WHERE chave_idempotencia = ?`)
+    .bind(item.produto_id, item.produto_nome, item.quantidade, item.preco_unitario, item.subtotal, item.item_ordem, chaveIdempotencia));
+  for (const pagamento of pagamentos) statements.push(env.DB.prepare(`INSERT INTO visita_pagamentos
+    (visita_id, forma_pagamento, valor, created_at)
+    SELECT id, ?, ?, CURRENT_TIMESTAMP FROM visitas WHERE chave_idempotencia = ?`)
+    .bind(pagamento.forma, pagamento.valor, chaveIdempotencia));
+  if (alvo) {
+    const condicaoAlvo = canalVenda === "ROTA" ? `EXISTS (
+      SELECT 1 FROM estoque_cargas carga
+      INNER JOIN estoque_locais local ON local.id = carga.local_carga_id
+      WHERE carga.id = ${Number(alvo.carga_id)} AND carga.status = 'ABERTA'
+        AND carga.vendedor_id = ${Number(user.vendedorId)} AND carga.local_carga_id = ${Number(alvo.local_id)}
+        AND local.tipo = 'CARGA_VENDEDOR' AND local.ativo = 1 AND local.vendedor_id = ${Number(user.vendedorId)}
+    )` : `EXISTS (SELECT 1 FROM estoque_locais local WHERE local.id = ${Number(alvo.local_id)} AND local.tipo = 'CENTRAL' AND local.ativo = 1)`;
+    statements.push(env.DB.prepare(`INSERT INTO estoque_operacoes
+      (tipo, status, data_operacao, origem_tipo, origem_id, chave_idempotencia, usuario_id, observacao, created_at)
+      SELECT 'SAIDA_VENDA', 'CONFIRMADA', data_visita, 'VENDA', id, ?, ?, ?, CURRENT_TIMESTAMP
+      FROM visitas WHERE chave_idempotencia = ? AND ${condicaoAlvo}`).bind(chaveOperacao, user.vendedorId,
+        "Baixa automática da venda; situação do saldo calculada dentro da transação.", chaveIdempotencia));
+    for (const item of itens) {
+      const condicaoItem = `${condicaoAlvo} AND EXISTS (
+        SELECT 1 FROM visitas visita INNER JOIN visita_itens item ON item.visita_id = visita.id
+        WHERE visita.chave_idempotencia = ? AND item.item_ordem = ? AND item.produto_id = ? AND item.quantidade = ?
+      )${alvo.carga_id ? ` AND EXISTS (SELECT 1 FROM estoque_carga_itens WHERE carga_id = ${Number(alvo.carga_id)} AND produto_id = ?)` : ""}`;
+      statements.push(env.DB.prepare(`INSERT INTO estoque_movimentacoes
+      (operacao_id, local_id, produto_id, carga_id, carga_item_id, visita_id, visita_item_id, quantidade, efeito, created_at)
+      VALUES (
+        COALESCE((SELECT id FROM estoque_operacoes WHERE chave_idempotencia = ?), 0), ?, ?, ?,
+        ${alvo.carga_id ? "(SELECT id FROM estoque_carga_itens WHERE carga_id = ? AND produto_id = ?)" : "NULL"},
+        COALESCE((SELECT id FROM visitas WHERE chave_idempotencia = ?), 0),
+        COALESCE((SELECT item.id FROM visita_itens item INNER JOIN visitas visita ON visita.id = item.visita_id
+          WHERE visita.chave_idempotencia = ? AND item.item_ordem = ?), 0),
+        CASE WHEN ${condicaoItem} THEN ? ELSE 0 END, -1, CURRENT_TIMESTAMP
+      )`)
+      .bind(...(alvo.carga_id
+        ? [chaveOperacao, alvo.local_id, item.produto_id, alvo.carga_id, alvo.carga_id, item.produto_id,
+          chaveIdempotencia, chaveIdempotencia, item.item_ordem,
+          chaveIdempotencia, item.item_ordem, item.produto_id, item.quantidade, item.produto_id, item.quantidade]
+        : [chaveOperacao, alvo.local_id, item.produto_id, null, chaveIdempotencia, chaveIdempotencia, item.item_ordem,
+          chaveIdempotencia, item.item_ordem, item.produto_id, item.quantidade, item.quantidade])));
+    }
+    const coerenciaMovimentos = `
+      (SELECT COUNT(*) FROM estoque_operacoes operacao WHERE operacao.chave_idempotencia = ?) = 1
+      AND (SELECT COUNT(*) FROM estoque_movimentacoes movimento INNER JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id WHERE operacao.chave_idempotencia = ?) =
+          (SELECT COUNT(*) FROM visita_itens item INNER JOIN visitas visita ON visita.id = item.visita_id WHERE visita.chave_idempotencia = ?)
+      AND NOT EXISTS (
+        SELECT 1 FROM visita_itens item INNER JOIN visitas visita ON visita.id = item.visita_id
+        LEFT JOIN estoque_movimentacoes movimento ON movimento.visita_item_id = item.id AND movimento.efeito = -1
+        WHERE visita.chave_idempotencia = ? AND (
+          movimento.id IS NULL OR movimento.visita_id <> visita.id OR movimento.produto_id <> item.produto_id
+          OR movimento.quantidade <> item.quantidade OR movimento.local_id <> ${Number(alvo.local_id)}
+          ${alvo.carga_id ? `OR movimento.carga_id <> ${Number(alvo.carga_id)} OR movimento.carga_item_id IS NULL
+            OR NOT EXISTS (SELECT 1 FROM estoque_carga_itens carga_item WHERE carga_item.id = movimento.carga_item_id
+              AND carga_item.carga_id = ${Number(alvo.carga_id)} AND carga_item.produto_id = item.produto_id)` : "OR movimento.carga_id IS NOT NULL OR movimento.carga_item_id IS NOT NULL"}
+        )
+      )`;
+    const saldoNegativo = `EXISTS (
+      SELECT 1 FROM visita_itens item INNER JOIN visitas visita ON visita.id = item.visita_id
+      WHERE visita.chave_idempotencia = ? AND (
+        SELECT COALESCE(SUM(movimento.quantidade * movimento.efeito), 0)
+        FROM estoque_movimentacoes movimento
+        WHERE movimento.local_id = ${Number(alvo.local_id)} AND movimento.produto_id = item.produto_id
+      ) < 0
+    )`;
+    statements.push(env.DB.prepare(`UPDATE visitas SET
+      estoque_status = CASE WHEN ${coerenciaMovimentos} THEN CASE WHEN ${saldoNegativo} THEN 'DIVERGENTE' ELSE 'CONFIRMADO' END ELSE 'ESTRUTURA_INVALIDA' END,
+      estoque_motivo = CASE WHEN ${coerenciaMovimentos} AND ${saldoNegativo} THEN 'SALDO_INSUFICIENTE' ELSE NULL END
+      WHERE chave_idempotencia = ?`)
+      .bind(chaveOperacao, chaveOperacao, chaveIdempotencia, chaveIdempotencia, chaveIdempotencia,
+        chaveOperacao, chaveOperacao, chaveIdempotencia, chaveIdempotencia, chaveIdempotencia, chaveIdempotencia));
+  }
+  if (clienteId) statements.push(env.DB.prepare(`UPDATE clientes SET ultima_visita = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND EXISTS (SELECT 1 FROM visitas WHERE chave_idempotencia = ?)`)
+    .bind(dataVisita, clienteId, chaveIdempotencia));
+  try { await env.DB.batch(statements); }
+  catch (err) {
+    const concorrente = await carregarVendaPorChave(env, chaveIdempotencia);
+    if (concorrente && concorrente.idempotencia_hash === idempotenciaHash) {
+      const auditoriaConcorrente = await auditarBaixaVenda(env, chaveIdempotencia);
+      if (auditoriaConcorrente) return json({ error: "Falha crítica de auditoria da venda concorrente.", detalhe: auditoriaConcorrente.mensagem }, 500);
+      return json(respostaVendaSalva(concorrente, cliente, user, true));
+    }
+    if (concorrente) return json({ error: "A chave de idempotência já foi usada com dados diferentes." }, 409);
+    const concorrenciaOperacional = alvo && !await alvoEstoqueValido(env, alvo, canalVenda, user.vendedorId, itens);
+    if (concorrenciaOperacional) {
+      const fallback = [env.DB.prepare(`INSERT INTO visitas (
+        vendedor_id, cliente_id, cliente_avulso_id, data_visita, canal_venda, comprou,
+        valor_total, observacoes, forma_pagamento, valor_recebido, desconto, situacao_pagamento,
+        chave_idempotencia, idempotencia_hash, status_registro, estoque_status, estoque_motivo, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ATIVA', 'SEM_BAIXA', 'VINCULO_ESTOQUE_INDISPONIVEL', CURRENT_TIMESTAMP)`)
+        .bind(user.vendedorId, clienteId || 0, clienteAvulsoId || null, dataVisita, canalVenda, comprou,
+          valorTotal, observacoes, formaPagamento, valorRecebido, desconto, situacaoPagamento, chaveIdempotencia, idempotenciaHash)];
+      for (const item of itens) fallback.push(env.DB.prepare(`INSERT INTO visita_itens
+        (visita_id, produto_id, produto_nome, quantidade, preco_unitario, subtotal, item_ordem)
+        SELECT id, ?, ?, ?, ?, ?, ? FROM visitas WHERE chave_idempotencia = ?`)
+        .bind(item.produto_id, item.produto_nome, item.quantidade, item.preco_unitario, item.subtotal, item.item_ordem, chaveIdempotencia));
+      for (const pagamento of pagamentos) fallback.push(env.DB.prepare(`INSERT INTO visita_pagamentos
+        (visita_id, forma_pagamento, valor, created_at)
+        SELECT id, ?, ?, CURRENT_TIMESTAMP FROM visitas WHERE chave_idempotencia = ?`)
+        .bind(pagamento.forma, pagamento.valor, chaveIdempotencia));
+      if (clienteId) fallback.push(env.DB.prepare(`UPDATE clientes SET ultima_visita = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND EXISTS (SELECT 1 FROM visitas WHERE chave_idempotencia = ?)`)
+        .bind(dataVisita, clienteId, chaveIdempotencia));
+      try { await env.DB.batch(fallback); }
+      catch (fallbackError) {
+        const repetida = await carregarVendaPorChave(env, chaveIdempotencia);
+        if (repetida && repetida.idempotencia_hash === idempotenciaHash) {
+          const auditoriaRepetida = await auditarBaixaVenda(env, chaveIdempotencia);
+          if (auditoriaRepetida) return json({ error: "Falha crítica de auditoria da venda repetida.", detalhe: auditoriaRepetida.mensagem }, 500);
+          return json(respostaVendaSalva(repetida, cliente, user, true));
+        }
+        if (repetida) return json({ error: "A chave de idempotência já foi usada com dados diferentes." }, 409);
+        throw fallbackError;
+      }
+    } else throw err;
+  }
+  const venda = await carregarVendaPorChave(env, chaveIdempotencia);
+  if (!venda) throw new Error("A transação da venda não foi confirmada.");
+  const auditoria = await auditarBaixaVenda(env, chaveIdempotencia);
+  if (auditoria) return json({ error: "Falha crítica de auditoria após registrar a venda.", detalhe: auditoria.mensagem }, 500);
+  return json(respostaVendaSalva(venda, cliente, user, false), 201);
 }
 
 // Comissão estimada por fardo. Este é o único valor a alterar quando a regra comercial mudar.
@@ -820,6 +1038,8 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
   let filtro = vendedorId ? " AND v.vendedor_id = ?" : "";
   if (user.role === "admin" && visao === "geral" && origem === "administracao") filtro += " AND EXISTS (SELECT 1 FROM vendedores vo WHERE vo.id = v.vendedor_id AND vo.role = 'admin')";
   if (user.role === "admin" && visao === "geral" && origem === "vendedores") filtro += " AND EXISTS (SELECT 1 FROM vendedores vo WHERE vo.id = v.vendedor_id AND vo.role = 'vendedor')";
+  const filtroCanceladas = `${filtro} AND v.status_registro = 'CANCELADA'`;
+  filtro += " AND v.status_registro = 'ATIVA'";
   const filtroTeste = filtroRegistroTeste("v", somenteTeste);
   const params = vendedorId ? [dataInicial, dataFinal, vendedorId] : [dataInicial, dataFinal];
 
@@ -898,6 +1118,24 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
     WHERE v.data_visita BETWEEN ? AND ?${filtro} AND ${filtroTeste}
     ORDER BY vp.visita_id DESC, vp.id
   `).bind(...params).all();
+
+  const canceladas = await env.DB.prepare(`
+    SELECT v.*, COALESCE(c.nome_fantasia, c.razao_social, c.nome_estabelecimento,
+      ca.nome_estabelecimento, 'Consumidor') AS cliente_nome, COALESCE(vd.nome, 'Vendedor') AS vendedor_nome
+    FROM visitas v LEFT JOIN clientes c ON c.id = v.cliente_id
+    LEFT JOIN clientes_avulsos ca ON ca.id = v.cliente_avulso_id
+    LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
+    WHERE v.data_visita BETWEEN ? AND ?${filtroCanceladas} AND ${filtroTeste}
+    ORDER BY v.cancelada_em DESC, v.id DESC
+  `).bind(...params).all();
+  const itensCancelados = await env.DB.prepare(`SELECT vi.* FROM visita_itens vi
+    INNER JOIN visitas v ON v.id = vi.visita_id
+    WHERE v.data_visita BETWEEN ? AND ?${filtroCanceladas} AND ${filtroTeste}
+    ORDER BY vi.visita_id DESC, vi.id`).bind(...params).all();
+  const pagamentosCancelados = await env.DB.prepare(`SELECT vp.visita_id, vp.forma_pagamento AS forma, vp.valor
+    FROM visita_pagamentos vp INNER JOIN visitas v ON v.id = vp.visita_id
+    WHERE v.data_visita BETWEEN ? AND ?${filtroCanceladas} AND ${filtroTeste}
+    ORDER BY vp.visita_id DESC, vp.id`).bind(...params).all();
 
   const resumoVendedores = user.role === "admin" && visao === "geral"
     ? await env.DB.prepare(`
@@ -993,6 +1231,18 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
         : Number(visita.valor_recebido || 0)
     }]
   }));
+  const itensCanceladosPorVisita = new Map(), pagamentosCanceladosPorVisita = new Map();
+  for (const item of itensCancelados.results || []) {
+    if (!itensCanceladosPorVisita.has(Number(item.visita_id))) itensCanceladosPorVisita.set(Number(item.visita_id), []);
+    itensCanceladosPorVisita.get(Number(item.visita_id)).push(item);
+  }
+  for (const pagamento of pagamentosCancelados.results || []) {
+    if (!pagamentosCanceladosPorVisita.has(Number(pagamento.visita_id))) pagamentosCanceladosPorVisita.set(Number(pagamento.visita_id), []);
+    pagamentosCanceladosPorVisita.get(Number(pagamento.visita_id)).push({ forma: pagamento.forma, valor: Number(pagamento.valor || 0) });
+  }
+  const vendasCanceladas = (canceladas.results || []).map(visita => ({ ...visita,
+    itens: itensCanceladosPorVisita.get(Number(visita.id)) || [],
+    pagamentos: pagamentosCanceladosPorVisita.get(Number(visita.id)) || [] }));
 
   const resumoVendedor = visao === "vendedor" ? {
     ...resumo,
@@ -1009,7 +1259,7 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
     fechamento_dinheiro: fechamentoDinheiro, outras_formas_pagamento: outrasFormas.results || [],
     formas_pagamento: formas.results || [], resumo_vendedores: resumoVendedores.results || [],
     resumo_por_vendedor: resumoVendedores.results || [],
-    produtos: produtos.results || [], visitas: vendasDetalhadas });
+    produtos: produtos.results || [], visitas: vendasDetalhadas, vendas_canceladas: vendasCanceladas });
 }
 
 function idVisitaValido(id) {
@@ -1037,8 +1287,9 @@ async function atualizarVisitaAdmin(request, env, user, id) {
       return json({ error: "Corpo JSON inválido." }, 400);
     }
 
-    const visita = await env.DB.prepare("SELECT id, comprou FROM visitas WHERE id = ?").bind(id).first();
+    const visita = await env.DB.prepare("SELECT id, comprou, status_registro FROM visitas WHERE id = ?").bind(id).first();
     if (!visita) return json({ error: "Visita não encontrada." }, 404);
+    if (visita.status_registro === "CANCELADA") return json({ error: "Venda cancelada não pode ser alterada." }, 409);
 
     const dataVisita = normalizeText(dados.data_visita);
     const observacoes = normalizeText(dados.observacoes);
@@ -1081,6 +1332,84 @@ async function atualizarVisitaAdmin(request, env, user, id) {
   }
 }
 
+async function validarSaidaVendaParaCancelamento(env, visita) {
+  const [itensResultado, operacoesResultado] = await Promise.all([
+    env.DB.prepare("SELECT * FROM visita_itens WHERE visita_id = ? ORDER BY id").bind(visita.id).all(),
+    env.DB.prepare(`SELECT * FROM estoque_operacoes
+      WHERE tipo = 'SAIDA_VENDA' AND origem_tipo = 'VENDA' AND origem_id = ? ORDER BY id`).bind(visita.id).all(),
+  ]);
+  const itens = itensResultado.results || [], operacoes = operacoesResultado.results || [];
+  if (operacoes.length > 1) return { erro: "A venda possui mais de uma SAIDA_VENDA." };
+  if (!operacoes.length) {
+    if (["CONFIRMADO", "DIVERGENTE", "ESTORNADO"].includes(visita.estoque_status)) {
+      return { erro: "A venda indica baixa de estoque, mas a operação não foi encontrada." };
+    }
+    return { operacao: null, movimentos: [], itens };
+  }
+  const operacao = operacoes[0];
+  if (operacao.status !== "CONFIRMADA") return { erro: "A SAIDA_VENDA não está CONFIRMADA." };
+  const movimentosResultado = await env.DB.prepare(`SELECT movimento.*, local.tipo AS local_tipo,
+    local.vendedor_id AS local_vendedor_id, carga.vendedor_id AS carga_vendedor_id,
+    carga.local_carga_id
+    FROM estoque_movimentacoes movimento
+    INNER JOIN estoque_locais local ON local.id = movimento.local_id
+    LEFT JOIN estoque_cargas carga ON carga.id = movimento.carga_id
+    WHERE movimento.operacao_id = ? ORDER BY movimento.id`).bind(operacao.id).all();
+  const movimentos = movimentosResultado.results || [];
+  if (movimentos.length !== itens.length) return { erro: "A saída de estoque está parcial em relação aos itens da venda." };
+  for (const item of itens) {
+    const movimento = movimentos.find(m => Number(m.visita_item_id) === Number(item.id));
+    if (!movimento || Number(movimento.visita_id) !== Number(visita.id) || Number(movimento.produto_id) !== Number(item.produto_id)
+      || Number(movimento.quantidade) !== Number(item.quantidade) || Number(movimento.efeito) !== -1) {
+      return { erro: `Movimento incompatível com o item #${item.id}.` };
+    }
+    if (visita.canal_venda === "ROTA") {
+      const cargaItem = await env.DB.prepare(`SELECT id FROM estoque_carga_itens
+        WHERE id = ? AND carga_id = ? AND produto_id = ?`).bind(movimento.carga_item_id, movimento.carga_id, item.produto_id).first();
+      if (!movimento.carga_id || !cargaItem || movimento.local_tipo !== "CARGA_VENDEDOR"
+        || Number(movimento.local_vendedor_id) !== Number(visita.vendedor_id)
+        || Number(movimento.carga_vendedor_id) !== Number(visita.vendedor_id)
+        || Number(movimento.local_carga_id) !== Number(movimento.local_id)) {
+        return { erro: `Local ou carga incompatível no item #${item.id}.` };
+      }
+    } else if (visita.canal_venda === "LOJA_FABRICA") {
+      if (movimento.local_tipo !== "CENTRAL" || movimento.carga_id || movimento.carga_item_id) {
+        return { erro: `Local central incompatível no item #${item.id}.` };
+      }
+    } else return { erro: "Canal da venda incompatível com a saída de estoque." };
+  }
+  return { operacao, movimentos, itens };
+}
+
+async function auditarCancelamentoVenda(env, visitaId, chaveCancelamento, operacaoOriginal) {
+  const visita = await env.DB.prepare("SELECT * FROM visitas WHERE id = ?").bind(visitaId).first();
+  if (!visita || visita.status_registro !== "CANCELADA" || visita.chave_cancelamento !== chaveCancelamento) {
+    return { mensagem: "A venda não foi reivindicada pelo cancelamento esperado." };
+  }
+  if (!operacaoOriginal) return null;
+  const original = await env.DB.prepare("SELECT * FROM estoque_operacoes WHERE id = ?").bind(operacaoOriginal.id).first();
+  const estornos = await env.DB.prepare(`SELECT * FROM estoque_operacoes
+    WHERE operacao_estornada_id = ? AND tipo = 'ESTORNO'`).bind(operacaoOriginal.id).all();
+  if (original?.status !== "ESTORNADA" || (estornos.results || []).length !== 1
+    || estornos.results[0].status !== "CONFIRMADA" || visita.estoque_status !== "ESTORNADO") {
+    return { mensagem: "Cabeçalho do estorno ou estado final da venda está inválido." };
+  }
+  const [originais, inversos] = await Promise.all([
+    env.DB.prepare("SELECT * FROM estoque_movimentacoes WHERE operacao_id = ? ORDER BY id").bind(original.id).all(),
+    env.DB.prepare("SELECT * FROM estoque_movimentacoes WHERE operacao_id = ? ORDER BY id").bind(estornos.results[0].id).all(),
+  ]);
+  if ((originais.results || []).length !== (inversos.results || []).length) return { mensagem: "Estorno com quantidade incorreta de movimentos." };
+  for (const movimento of originais.results || []) {
+    const inverso = (inversos.results || []).find(item => Number(item.local_id) === Number(movimento.local_id)
+      && Number(item.produto_id) === Number(movimento.produto_id) && Number(item.carga_id || 0) === Number(movimento.carga_id || 0)
+      && Number(item.carga_item_id || 0) === Number(movimento.carga_item_id || 0)
+      && Number(item.visita_id) === Number(movimento.visita_id) && Number(item.visita_item_id) === Number(movimento.visita_item_id)
+      && Number(item.quantidade) === Number(movimento.quantidade) && Number(item.efeito) === -Number(movimento.efeito));
+    if (!inverso) return { mensagem: `Movimento #${movimento.id} não possui inverso integral.` };
+  }
+  return null;
+}
+
 async function excluirVisitaAdmin(request, env, user, id) {
   try {
     if (user.role !== "admin") return json({ error: "Acesso restrito ao administrador." }, 403);
@@ -1093,7 +1422,11 @@ async function excluirVisitaAdmin(request, env, user, id) {
       return json({ error: "Corpo JSON inválido." }, 400);
     }
     if (!normalizeText(dados.senha)) return json({ error: "Informe a senha atual do administrador." }, 400);
-    if (dados.confirmacao !== "EXCLUIR") return json({ error: "Digite EXCLUIR para confirmar." }, 400);
+    if (dados.confirmacao !== "CANCELAR") return json({ error: "Digite CANCELAR para confirmar." }, 400);
+    const motivo = normalizeText(dados.motivo_cancelamento);
+    const chaveCancelamento = normalizeText(dados.chave_idempotencia || dados.chave_cancelamento);
+    if (!motivo || motivo.length > 500) return json({ error: "Informe o motivo do cancelamento." }, 400);
+    if (!chaveCancelamento || chaveCancelamento.length > 180) return json({ error: "Chave de idempotência do cancelamento inválida." }, 400);
 
     const visita = await env.DB.prepare("SELECT * FROM visitas WHERE id = ?").bind(id).first();
     if (!visita) return json({ error: "Visita não encontrada." }, 404);
@@ -1101,23 +1434,139 @@ async function excluirVisitaAdmin(request, env, user, id) {
       return json({ error: "Senha do administrador inválida." }, 401);
     }
 
-    await env.DB.batch([
-      env.DB.prepare("DELETE FROM visita_itens WHERE visita_id = ?").bind(id),
-      env.DB.prepare("DELETE FROM visitas WHERE id = ?").bind(id),
-    ]);
-
-    const [visitaRestante, itensRestantes] = await Promise.all([
-      env.DB.prepare("SELECT COUNT(*) AS total FROM visitas WHERE id = ?").bind(id).first(),
-      env.DB.prepare("SELECT COUNT(*) AS total FROM visita_itens WHERE visita_id = ?").bind(id).first(),
-    ]);
-    if (Number(visitaRestante?.total || 0) !== 0 || Number(itensRestantes?.total || 0) !== 0) {
-      return json({ error: "Não foi possível confirmar a exclusão completa." }, 500);
+    if (visita.status_registro === "CANCELADA") {
+      if (visita.chave_cancelamento === chaveCancelamento && normalizeText(visita.motivo_cancelamento) === motivo) {
+        const originalExistente = await env.DB.prepare(`SELECT * FROM estoque_operacoes
+          WHERE tipo = 'SAIDA_VENDA' AND origem_tipo = 'VENDA' AND origem_id = ?`).bind(id).first();
+        const auditoriaExistente = await auditarCancelamentoVenda(env, id, chaveCancelamento, originalExistente || null);
+        if (auditoriaExistente) return json({ error: "Falha crítica de auditoria do cancelamento existente.", detalhe: auditoriaExistente.mensagem }, 500);
+        return json({ ok: true, idempotente: true, mensagem: "Venda já estava cancelada.", visita_id: id });
+      }
+      return json({ error: "A venda já foi cancelada com outra chave ou motivo." }, 409);
     }
-
-    return json({ ok: true, mensagem: "Venda excluída definitivamente.", visita_id: id });
+    const validacaoSaida = await validarSaidaVendaParaCancelamento(env, visita);
+    if (validacaoSaida.erro) return json({ error: "Cancelamento bloqueado: saída de estoque incoerente. Solicite auditoria.", detalhe: validacaoSaida.erro }, 409);
+    const operacao = validacaoSaida.operacao, movimentos = validacaoSaida.movimentos;
+    const chaveOperacaoEstorno = `CANCELAMENTO_VENDA:${chaveCancelamento}`;
+    const estoqueStatusCancelado = operacao ? "ESTORNADO" : visita.estoque_status;
+    const estoqueMotivoCancelado = !operacao && visita.estoque_status === "SEM_BAIXA" ? "CANCELADA_SEM_MOVIMENTACAO" : visita.estoque_motivo;
+    const statements = [env.DB.prepare(`UPDATE visitas SET status_registro = 'CANCELADA', estoque_status = ?, estoque_motivo = ?,
+      cancelada_em = CURRENT_TIMESTAMP, cancelada_por = ?, motivo_cancelamento = ?, chave_cancelamento = ?
+      WHERE id = ? AND status_registro = 'ATIVA' AND chave_cancelamento IS NULL`)
+      .bind(estoqueStatusCancelado, estoqueMotivoCancelado, user.vendedorId, motivo, chaveCancelamento, id)];
+    if (operacao && operacao.status === "CONFIRMADA") {
+      statements.push(env.DB.prepare(`INSERT INTO estoque_operacoes
+        (tipo, status, data_operacao, origem_tipo, origem_id, chave_idempotencia,
+         operacao_estornada_id, usuario_id, observacao, created_at)
+        SELECT 'ESTORNO', 'CONFIRMADA', ?, 'VENDA', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
+        FROM visitas WHERE id = ? AND status_registro = 'CANCELADA' AND chave_cancelamento = ?`)
+        .bind(obterDataLocalCuiaba(), id, chaveOperacaoEstorno, operacao.id, user.vendedorId,
+          `Cancelamento da venda #${id}: ${motivo}`, id, chaveCancelamento));
+      for (const movimento of movimentos) statements.push(env.DB.prepare(`INSERT INTO estoque_movimentacoes
+        (operacao_id, local_id, produto_id, carga_id, carga_item_id, visita_id, visita_item_id, quantidade, efeito, created_at)
+        VALUES (COALESCE((SELECT estorno.id FROM estoque_operacoes estorno
+          INNER JOIN visitas visita ON visita.id = estorno.origem_id
+          WHERE estorno.chave_idempotencia = ? AND visita.id = ?
+            AND visita.status_registro = 'CANCELADA' AND visita.chave_cancelamento = ?), 0),
+          ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`)
+        .bind(chaveOperacaoEstorno, id, chaveCancelamento,
+          movimento.local_id, movimento.produto_id, movimento.carga_id, movimento.carga_item_id,
+          movimento.visita_id, movimento.visita_item_id, movimento.quantidade, -Number(movimento.efeito)));
+      statements.push(env.DB.prepare(`UPDATE estoque_operacoes SET status = 'ESTORNADA'
+        WHERE id = ? AND status = 'CONFIRMADA' AND EXISTS (
+          SELECT 1 FROM visitas WHERE id = ? AND status_registro = 'CANCELADA' AND chave_cancelamento = ?
+        )`).bind(operacao.id, id, chaveCancelamento));
+      statements.push(env.DB.prepare(`UPDATE visitas SET estoque_status = CASE WHEN
+        status_registro = 'CANCELADA' AND chave_cancelamento = ?
+        AND (SELECT COUNT(*) FROM estoque_operacoes WHERE operacao_estornada_id = ? AND tipo = 'ESTORNO' AND status = 'CONFIRMADA') = 1
+        AND (SELECT COUNT(*) FROM estoque_movimentacoes WHERE operacao_id = ?) =
+            (SELECT COUNT(*) FROM estoque_movimentacoes movimento INNER JOIN estoque_operacoes estorno ON estorno.id = movimento.operacao_id WHERE estorno.operacao_estornada_id = ?)
+        AND NOT EXISTS (
+          SELECT 1 FROM estoque_movimentacoes original
+          LEFT JOIN estoque_movimentacoes inverso ON inverso.operacao_id = (SELECT id FROM estoque_operacoes WHERE operacao_estornada_id = ?)
+            AND inverso.local_id = original.local_id AND inverso.produto_id = original.produto_id
+            AND COALESCE(inverso.carga_id, 0) = COALESCE(original.carga_id, 0)
+            AND COALESCE(inverso.carga_item_id, 0) = COALESCE(original.carga_item_id, 0)
+            AND inverso.visita_id = original.visita_id AND inverso.visita_item_id = original.visita_item_id
+            AND inverso.quantidade = original.quantidade AND inverso.efeito = -original.efeito
+          WHERE original.operacao_id = ? AND inverso.id IS NULL
+        ) THEN 'ESTORNADO' ELSE 'ESTRUTURA_INVALIDA' END
+        WHERE id = ?`).bind(chaveCancelamento, operacao.id, operacao.id, operacao.id, operacao.id, operacao.id, id));
+    } else {
+      statements.push(env.DB.prepare(`UPDATE visitas SET estoque_status = CASE WHEN
+        status_registro = 'CANCELADA' AND chave_cancelamento = ? THEN estoque_status ELSE 'ESTRUTURA_INVALIDA' END
+        WHERE id = ?`).bind(chaveCancelamento, id));
+    }
+    try { await env.DB.batch(statements); }
+    catch (err) {
+      const concorrente = await env.DB.prepare("SELECT * FROM visitas WHERE id = ?").bind(id).first();
+      if (concorrente?.status_registro === "CANCELADA" && concorrente.chave_cancelamento === chaveCancelamento
+        && normalizeText(concorrente.motivo_cancelamento) === motivo) {
+        const auditoriaConcorrente = await auditarCancelamentoVenda(env, id, chaveCancelamento, operacao);
+        if (auditoriaConcorrente) return json({ error: "Falha crítica de auditoria do cancelamento concorrente.", detalhe: auditoriaConcorrente.mensagem }, 500);
+        return json({ ok: true, idempotente: true, mensagem: "Venda já estava cancelada.", visita_id: id });
+      }
+      if (String(err?.message || "").includes("UNIQUE constraint failed")) return json({ error: "A chave de cancelamento já foi utilizada." }, 409);
+      throw err;
+    }
+    const auditoriaCancelamento = await auditarCancelamentoVenda(env, id, chaveCancelamento, operacao);
+    if (auditoriaCancelamento) return json({ error: "Falha crítica de auditoria após cancelar a venda.", detalhe: auditoriaCancelamento.mensagem }, 500);
+    return json({ ok: true, idempotente: false, mensagem: "Venda cancelada e histórico preservado.", visita_id: id,
+      estoque_estornado: !!operacao });
   } catch (err) {
     return json({ error: "Erro ao excluir visita.", detalhe: err?.message || String(err) }, 500);
   }
+}
+
+async function listarVendasSemBaixa(request, env, user) {
+  if (!usuarioTemRole(user, "admin", "operacao")) return acessoNegado();
+  const resultado = await env.DB.prepare(`SELECT v.id, v.data_visita, v.canal_venda, v.estoque_status, v.estoque_motivo,
+    v.valor_total, v.observacoes, vd.nome AS vendedor_nome,
+    COALESCE(c.nome_fantasia, c.razao_social, ca.nome_estabelecimento, 'Consumidor') AS cliente_nome
+    FROM visitas v
+    LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
+    LEFT JOIN clientes c ON c.id = v.cliente_id
+    LEFT JOIN clientes_avulsos ca ON ca.id = v.cliente_avulso_id
+    WHERE v.status_registro = 'ATIVA' AND v.estoque_status = 'SEM_BAIXA'
+    ORDER BY v.data_visita DESC, v.id DESC LIMIT 500`).all();
+  return json(resultado.results || []);
+}
+
+async function conciliarVendaSemBaixa(request, env, user, id) {
+  if (!usuarioTemRole(user, "admin", "operacao")) return acessoNegado();
+  if (!idVisitaValido(id)) return json({ error: "ID de venda inválido." }, 400);
+  const dados = await request.json(), motivo = normalizeText(dados.motivo), chave = normalizeText(dados.chave_idempotencia);
+  if (!motivo || motivo.length > 500) return json({ error: "Informe o motivo da conciliação." }, 400);
+  if (!chave || chave.length > 180) return json({ error: "Chave de idempotência da conciliação inválida." }, 400);
+  const visita = await env.DB.prepare("SELECT * FROM visitas WHERE id = ?").bind(id).first();
+  if (!visita) return json({ error: "Venda não encontrada." }, 404);
+  if (visita.estoque_status === "CONCILIADO") {
+    if (visita.chave_conciliacao === chave && normalizeText(visita.estoque_conciliacao_motivo) === motivo) {
+      return json({ success: true, idempotente: true, visita_id: id, estoque_status: "CONCILIADO" });
+    }
+    return json({ error: "A venda já foi conciliada com outra chave ou motivo." }, 409);
+  }
+  if (visita.status_registro !== "ATIVA" || visita.estoque_status !== "SEM_BAIXA") {
+    return json({ error: "Somente venda ativa com estoque SEM_BAIXA pode ser conciliada." }, 409);
+  }
+  try {
+    const resultado = await env.DB.prepare(`UPDATE visitas SET estoque_status = 'CONCILIADO',
+      estoque_conciliado_em = CURRENT_TIMESTAMP, estoque_conciliado_por = ?,
+      estoque_conciliacao_motivo = ?, chave_conciliacao = ?
+      WHERE id = ? AND status_registro = 'ATIVA' AND estoque_status = 'SEM_BAIXA'`)
+      .bind(user.vendedorId, motivo, chave, id).run();
+    if (Number(resultado.meta?.changes || 0) !== 1) return json({ error: "A situação da venda mudou durante a conciliação." }, 409);
+  } catch (err) {
+    const concorrente = await env.DB.prepare("SELECT * FROM visitas WHERE id = ?").bind(id).first();
+    if (concorrente?.estoque_status === "CONCILIADO" && concorrente.chave_conciliacao === chave
+      && normalizeText(concorrente.estoque_conciliacao_motivo) === motivo) {
+      return json({ success: true, idempotente: true, visita_id: id, estoque_status: "CONCILIADO" });
+    }
+    if (String(err?.message || "").includes("UNIQUE constraint failed")) return json({ error: "A chave de conciliação já foi utilizada." }, 409);
+    throw err;
+  }
+  return json({ success: true, idempotente: false, visita_id: id, estoque_status: "CONCILIADO",
+    aviso: "Conciliação registrada sem baixa retroativa. A correção física deve ser feita por ajuste auditável." });
 }
 
 function acessoProducaoPermitido(user) {
@@ -3368,6 +3817,10 @@ if (url.pathname === "/api/sync" && request.method === "POST") {
     }
     if (/^\/api\/estoque\/cargas\/\d+$/.test(url.pathname) && request.method === "GET") {
       return obterCargaVendedor(env, user, Number(url.pathname.split("/").pop()));
+    }
+    if (url.pathname === "/api/estoque/vendas-sem-baixa" && request.method === "GET") return listarVendasSemBaixa(request, env, user);
+    if (/^\/api\/estoque\/vendas-sem-baixa\/\d+\/conciliacao$/.test(url.pathname) && request.method === "POST") {
+      return conciliarVendaSemBaixa(request, env, user, Number(url.pathname.split("/")[4]));
     }
     if (url.pathname === "/api/visitas" && request.method === "GET") return listarVisitas(request, env, user);
     if (url.pathname === "/api/visitas" && request.method === "POST") return criarVenda(request, env, user);
