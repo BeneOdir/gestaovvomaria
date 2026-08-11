@@ -1015,7 +1015,10 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
   const dataValida = valor => /^\d{4}-\d{2}-\d{2}$/.test(valor) && !Number.isNaN(Date.parse(`${valor}T00:00:00Z`));
   if (!dataValida(dataInicial) || !dataValida(dataFinal)) return json({ error: "Período inválido. Use AAAA-MM-DD." }, 400);
   if (dataInicial > dataFinal) return json({ error: "A data inicial deve ser anterior à data final." }, 400);
-  if (!['geral', 'vendedor'].includes(visaoSolicitada)) return json({ error: "Visão de relatório inválida." }, 400);
+  if (!['geral', 'vendedor', 'teste'].includes(visaoSolicitada)) return json({ error: "Visão de relatório inválida." }, 400);
+  if (visaoSolicitada === "teste" && (!somenteTeste || user.role !== "admin")) {
+    return json({ error: "Visão de registros de teste restrita ao administrador." }, 403);
+  }
   if (!['todos', 'administracao', 'vendedores'].includes(origem)) return json({ error: "Origem inválida." }, 400);
   if (vendedorInformado && (!/^\d+$/.test(vendedorInformado) || Number(vendedorInformado) <= 0)) return json({ error: "vendedor_id inválido." }, 400);
 
@@ -1036,8 +1039,8 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
   }
 
   let filtro = vendedorId ? " AND v.vendedor_id = ?" : "";
-  if (user.role === "admin" && visao === "geral" && origem === "administracao") filtro += " AND EXISTS (SELECT 1 FROM vendedores vo WHERE vo.id = v.vendedor_id AND vo.role = 'admin')";
-  if (user.role === "admin" && visao === "geral" && origem === "vendedores") filtro += " AND EXISTS (SELECT 1 FROM vendedores vo WHERE vo.id = v.vendedor_id AND vo.role = 'vendedor')";
+  if (user.role === "admin" && ["geral", "teste"].includes(visao) && origem === "administracao") filtro += " AND EXISTS (SELECT 1 FROM vendedores vo WHERE vo.id = v.vendedor_id AND vo.role = 'admin')";
+  if (user.role === "admin" && ["geral", "teste"].includes(visao) && origem === "vendedores") filtro += " AND EXISTS (SELECT 1 FROM vendedores vo WHERE vo.id = v.vendedor_id AND vo.role = 'vendedor')";
   const filtroCanceladas = `${filtro} AND v.status_registro = 'CANCELADA'`;
   filtro += " AND v.status_registro = 'ATIVA'";
   const filtroTeste = filtroRegistroTeste("v", somenteTeste);
@@ -1137,7 +1140,7 @@ async function relatorioPeriodo(request, env, user, somenteTeste = false) {
     WHERE v.data_visita BETWEEN ? AND ?${filtroCanceladas} AND ${filtroTeste}
     ORDER BY vp.visita_id DESC, vp.id`).bind(...params).all();
 
-  const resumoVendedores = user.role === "admin" && visao === "geral"
+  const resumoVendedores = user.role === "admin" && ["geral", "teste"].includes(visao)
     ? await env.DB.prepare(`
       SELECT v.vendedor_id,
         CASE WHEN vd.role = 'admin' THEN 'Administração / Loja' ELSE COALESCE(vd.nome, 'Vendedor') END AS vendedor_nome,
