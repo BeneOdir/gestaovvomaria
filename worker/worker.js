@@ -2959,6 +2959,64 @@ async function carregarCargaCompleta(env, cargaId) {
     GROUP BY item.id, produto.nome, carga.local_carga_id
     ORDER BY produto.nome COLLATE NOCASE, item.id
   `).bind(cargaId).all();
+  let saldoOperacional = null;
+  if (carga.status === "ABERTA") saldoOperacional = await env.DB.prepare(`
+    WITH produtos_carga AS (
+      SELECT produto_id
+      FROM estoque_carga_itens
+      WHERE carga_id = ?
+      UNION
+      SELECT produto_id
+      FROM estoque_movimentacoes
+      WHERE local_id = ?
+    ), carregado AS (
+      SELECT produto_id, SUM(quantidade_carregada) AS total_carregado
+      FROM estoque_carga_itens
+      WHERE carga_id = ?
+      GROUP BY produto_id
+    ), vendido_rota AS (
+      SELECT movimento.produto_id, SUM(movimento.quantidade) AS total_vendido_rota
+      FROM estoque_movimentacoes movimento
+      INNER JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id
+      INNER JOIN visitas visita ON visita.id = movimento.visita_id
+      WHERE movimento.carga_id = ? AND movimento.local_id = ?
+        AND movimento.efeito = -1
+        AND operacao.tipo = 'SAIDA_VENDA' AND operacao.status = 'CONFIRMADA'
+        AND visita.status_registro = 'ATIVA' AND visita.canal_venda = 'ROTA'
+      GROUP BY movimento.produto_id
+    ), estornos_ajustes AS (
+      SELECT movimento.produto_id,
+        SUM(movimento.quantidade * movimento.efeito) AS total_estornos_ajustes
+      FROM estoque_movimentacoes movimento
+      INNER JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id
+      WHERE movimento.local_id = ? AND operacao.status = 'CONFIRMADA'
+        AND operacao.tipo NOT IN ('TRANSFERENCIA_CARGA', 'SAIDA_VENDA')
+      GROUP BY movimento.produto_id
+    ), saldo_local AS (
+      SELECT produto_id, SUM(quantidade * efeito) AS saldo_atual
+      FROM estoque_movimentacoes
+      WHERE local_id = ?
+      GROUP BY produto_id
+    )
+    SELECT produto.id AS produto_id, produto.nome AS produto_nome,
+      COALESCE(carregado.total_carregado, 0) AS total_carregado,
+      COALESCE(vendido_rota.total_vendido_rota, 0) AS total_vendido_rota,
+      COALESCE(estornos_ajustes.total_estornos_ajustes, 0) AS total_estornos_ajustes,
+      COALESCE(saldo_local.saldo_atual, 0) AS saldo_atual,
+      CASE
+        WHEN COALESCE(saldo_local.saldo_atual, 0) > 0 THEN 'DISPONIVEL'
+        WHEN COALESCE(saldo_local.saldo_atual, 0) < 0 THEN 'DIVERGENTE'
+        ELSE 'ZERADO'
+      END AS situacao
+    FROM produtos_carga
+    INNER JOIN produtos produto ON produto.id = produtos_carga.produto_id
+    LEFT JOIN carregado ON carregado.produto_id = produtos_carga.produto_id
+    LEFT JOIN vendido_rota ON vendido_rota.produto_id = produtos_carga.produto_id
+    LEFT JOIN estornos_ajustes ON estornos_ajustes.produto_id = produtos_carga.produto_id
+    LEFT JOIN saldo_local ON saldo_local.produto_id = produtos_carga.produto_id
+    ORDER BY produto.nome COLLATE NOCASE, produto.id
+  `).bind(cargaId, carga.local_carga_id, cargaId, cargaId, carga.local_carga_id,
+    carga.local_carga_id, carga.local_carga_id).all();
   const operacoesResultado = await env.DB.prepare(`
     SELECT operacao.id, operacao.tipo, operacao.status,
       operacao.data_operacao, operacao.chave_idempotencia,
@@ -3006,7 +3064,7 @@ async function carregarCargaCompleta(env, cargaId) {
           ? "COMPLEMENTO" : "CARGA_INICIAL";
     }
   }
-  return { ...carga, itens: itens.results || [], operacoes };
+  return { ...carga, itens: itens.results || [], saldo_operacional: saldoOperacional?.results || null, operacoes };
 }
 
 async function carregarTransferenciaCargaPorChave(env, chave) {
