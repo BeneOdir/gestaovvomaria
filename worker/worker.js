@@ -2989,7 +2989,17 @@ async function carregarCargaCompleta(env, cargaId) {
         SUM(movimento.quantidade * movimento.efeito) AS total_estornos_ajustes
       FROM estoque_movimentacoes movimento
       INNER JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id
-      WHERE movimento.local_id = ? AND operacao.status = 'CONFIRMADA'
+      WHERE movimento.local_id = ? AND movimento.carga_id = ?
+        AND operacao.status = 'CONFIRMADA'
+        AND operacao.tipo NOT IN ('TRANSFERENCIA_CARGA', 'SAIDA_VENDA')
+      GROUP BY movimento.produto_id
+    ), nao_classificados AS (
+      SELECT movimento.produto_id,
+        SUM(movimento.quantidade * movimento.efeito) AS total_nao_classificado
+      FROM estoque_movimentacoes movimento
+      INNER JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id
+      WHERE movimento.local_id = ? AND movimento.carga_id IS NULL
+        AND movimento.created_at >= ? AND operacao.status = 'CONFIRMADA'
         AND operacao.tipo NOT IN ('TRANSFERENCIA_CARGA', 'SAIDA_VENDA')
       GROUP BY movimento.produto_id
     ), saldo_local AS (
@@ -3002,6 +3012,7 @@ async function carregarCargaCompleta(env, cargaId) {
       COALESCE(carregado.total_carregado, 0) AS total_carregado,
       COALESCE(vendido_rota.total_vendido_rota, 0) AS total_vendido_rota,
       COALESCE(estornos_ajustes.total_estornos_ajustes, 0) AS total_estornos_ajustes,
+      COALESCE(nao_classificados.total_nao_classificado, 0) AS total_nao_classificado,
       COALESCE(saldo_local.saldo_atual, 0) AS saldo_atual,
       CASE
         WHEN COALESCE(saldo_local.saldo_atual, 0) > 0 THEN 'DISPONIVEL'
@@ -3013,10 +3024,12 @@ async function carregarCargaCompleta(env, cargaId) {
     LEFT JOIN carregado ON carregado.produto_id = produtos_carga.produto_id
     LEFT JOIN vendido_rota ON vendido_rota.produto_id = produtos_carga.produto_id
     LEFT JOIN estornos_ajustes ON estornos_ajustes.produto_id = produtos_carga.produto_id
+    LEFT JOIN nao_classificados ON nao_classificados.produto_id = produtos_carga.produto_id
     LEFT JOIN saldo_local ON saldo_local.produto_id = produtos_carga.produto_id
     ORDER BY produto.nome COLLATE NOCASE, produto.id
   `).bind(cargaId, carga.local_carga_id, cargaId, cargaId, carga.local_carga_id,
-    carga.local_carga_id, carga.local_carga_id).all();
+    carga.local_carga_id, cargaId, carga.local_carga_id, carga.aberta_em,
+    carga.local_carga_id).all();
   const operacoesResultado = await env.DB.prepare(`
     SELECT operacao.id, operacao.tipo, operacao.status,
       operacao.data_operacao, operacao.chave_idempotencia,
@@ -3030,6 +3043,9 @@ async function carregarCargaCompleta(env, cargaId) {
       operacao.tipo = 'TRANSFERENCIA_CARGA'
       AND operacao.origem_tipo = 'CARGA' AND operacao.origem_id = ?
     ) OR (
+      operacao.tipo IN ('AJUSTE_ENTRADA', 'AJUSTE_SAIDA')
+      AND operacao.origem_tipo = 'CARGA' AND operacao.origem_id = ?
+    ) OR (
       operacao.tipo = 'ESTORNO'
       AND operacao.operacao_estornada_id IN (
         SELECT id FROM estoque_operacoes
@@ -3038,7 +3054,7 @@ async function carregarCargaCompleta(env, cargaId) {
       )
     )
     ORDER BY operacao.created_at, operacao.id
-  `).bind(cargaId, cargaId).all();
+  `).bind(cargaId, cargaId, cargaId).all();
   const operacoes = operacoesResultado.results || [];
   if (operacoes.length) {
     const ids = operacoes.map(() => "?").join(",");
@@ -3060,6 +3076,8 @@ async function carregarCargaCompleta(env, cargaId) {
       operacao.movimentacoes = porOperacao.get(Number(operacao.id)) || [];
       operacao.classificacao = operacao.tipo === "ESTORNO"
         ? "CANCELAMENTO_ESTORNO"
+        : operacao.tipo === "AJUSTE_ENTRADA" || operacao.tipo === "AJUSTE_SAIDA"
+          ? "CONFERENCIA_SALDO"
         : String(operacao.chave_idempotencia).startsWith("COMPLEMENTO_CARGA:")
           ? "COMPLEMENTO" : "CARGA_INICIAL";
     }
@@ -3653,6 +3671,144 @@ async function obterCargaVendedor(env, user, cargaId) {
   return json(carga);
 }
 
+function chaveConferenciaCarga(cargaId, chaveCliente) {
+  return `CONFERENCIA_CARGA:${cargaId}:${chaveCliente}`;
+}
+
+function dadosAuditoriaConferencia(dados) {
+  return `CONFERENCIA_SALDO:${JSON.stringify(dados)}`;
+}
+
+async function carregarConferenciaCargaPorChave(env, chave) {
+  const operacao = await env.DB.prepare(`
+    SELECT operacao.id, operacao.tipo, operacao.status, operacao.origem_id,
+      operacao.chave_idempotencia, operacao.usuario_id, operacao.observacao,
+      operacao.created_at, movimento.local_id, movimento.produto_id,
+      movimento.carga_id, movimento.carga_item_id, movimento.quantidade,
+      movimento.efeito
+    FROM estoque_operacoes operacao
+    LEFT JOIN estoque_movimentacoes movimento ON movimento.operacao_id = operacao.id
+    WHERE operacao.chave_idempotencia = ?
+  `).bind(chave).first();
+  if (!operacao) return null;
+  const prefixo = "CONFERENCIA_SALDO:";
+  let auditoria = null;
+  if (String(operacao.observacao || "").startsWith(prefixo)) {
+    try { auditoria = JSON.parse(String(operacao.observacao).slice(prefixo.length)); } catch { auditoria = null; }
+  }
+  return { ...operacao, auditoria };
+}
+
+function conferenciaCargaCompativel(conferencia, esperado) {
+  const auditoria = conferencia?.auditoria;
+  return conferencia?.tipo === esperado.tipo && conferencia?.status === "CONFIRMADA"
+    && Number(conferencia.origem_id) === esperado.cargaId
+    && Number(conferencia.carga_id) === esperado.cargaId
+    && Number(conferencia.local_id) === esperado.localId
+    && Number(conferencia.produto_id) === esperado.produtoId
+    && Number(conferencia.quantidade) === Math.abs(esperado.diferenca)
+    && Number(conferencia.efeito) === Math.sign(esperado.diferenca)
+    && auditoria && Number(auditoria.produto_id) === esperado.produtoId
+    && Number(auditoria.saldo_anterior) === esperado.saldoAnterior
+    && Number(auditoria.quantidade_fisica) === esperado.quantidadeFisica
+    && Number(auditoria.diferenca) === esperado.diferenca
+    && normalizeText(auditoria.motivo) === esperado.motivo;
+}
+
+async function registrarConferenciaCarga(request, env, user, cargaId) {
+  if (!acessoCargaPermitido(user)) return acessoNegado();
+  if (!Number.isInteger(cargaId) || cargaId <= 0) return json({ error: "Carga inválida." }, 400);
+  const dados = await request.json();
+  const produtoId = Number(dados.produto_id || 0);
+  const quantidadeFisica = Number(dados.quantidade_fisica);
+  const saldoEsperado = Number(dados.saldo_esperado);
+  const motivo = normalizeText(dados.motivo);
+  const chaveCliente = normalizeText(dados.chave_idempotencia);
+  if (!Number.isInteger(produtoId) || produtoId <= 0) return json({ error: "Produto inválido." }, 400);
+  if (!Number.isInteger(quantidadeFisica) || quantidadeFisica < 0) return json({ error: "A quantidade física deve ser um número inteiro maior ou igual a zero." }, 400);
+  if (!Number.isFinite(saldoEsperado)) return json({ error: "Saldo esperado inválido. Atualize o detalhe da carga." }, 400);
+  if (!motivo) return json({ error: "Informe o motivo da conferência." }, 400);
+  if (dados.confirmacao_fisica !== true || dados.confirmacao_explicita !== true) return json({ error: "Confirme a contagem física e o registro do ajuste." }, 400);
+  if (!chaveCliente || chaveCliente.length > 120) return json({ error: "Chave de idempotência inválida." }, 400);
+
+  const chave = chaveConferenciaCarga(cargaId, chaveCliente);
+  const existente = await carregarConferenciaCargaPorChave(env, chave);
+  if (existente) {
+    const auditoria = existente.auditoria;
+    if (!auditoria || Number(auditoria.saldo_anterior) !== saldoEsperado) return json({ error: "A chave de idempotência já foi usada com conteúdo diferente." }, 409);
+    const esperadoExistente = auditoria ? {
+      cargaId, localId: Number(existente.local_id), produtoId,
+      quantidadeFisica, saldoAnterior: Number(auditoria.saldo_anterior),
+      diferenca: Number(auditoria.diferenca), motivo, tipo: existente.tipo,
+    } : null;
+    if (!esperadoExistente || !conferenciaCargaCompativel(existente, esperadoExistente)) return json({ error: "A chave de idempotência já foi usada com conteúdo diferente." }, 409);
+    return json({ success: true, idempotente: true, sem_ajuste: false, conferencia: existente });
+  }
+
+  const estado = await env.DB.prepare(`
+    SELECT carga.id, carga.status, carga.local_carga_id,
+      item.id AS carga_item_id, produto.nome AS produto_nome,
+      COALESCE((SELECT SUM(movimento.quantidade * movimento.efeito)
+        FROM estoque_movimentacoes movimento
+        WHERE movimento.local_id = carga.local_carga_id AND movimento.produto_id = produto.id), 0) AS saldo_atual
+    FROM estoque_cargas carga
+    INNER JOIN produtos produto ON produto.id = ?
+    LEFT JOIN estoque_carga_itens item ON item.carga_id = carga.id AND item.produto_id = produto.id
+    WHERE carga.id = ? AND (
+      item.id IS NOT NULL OR EXISTS (SELECT 1 FROM estoque_movimentacoes movimento
+        WHERE movimento.local_id = carga.local_carga_id AND movimento.produto_id = produto.id)
+    )
+  `).bind(produtoId, cargaId).first();
+  if (!estado) return json({ error: "Produto não pertence ao saldo operacional desta carga." }, 409);
+  if (estado.status !== "ABERTA") return json({ error: "Somente cargas abertas podem receber conferência de saldo." }, 409);
+  const saldoAnterior = Number(estado.saldo_atual || 0);
+  if (saldoAnterior !== saldoEsperado) return json({ error: "O saldo mudou. Atualize o detalhe da carga e confira novamente.", saldo_atual: saldoAnterior }, 409);
+  const diferenca = quantidadeFisica - saldoAnterior;
+  if (diferenca === 0) return json({ success: true, idempotente: false, sem_ajuste: true, saldo_anterior: saldoAnterior, saldo_atual: saldoAnterior });
+
+  const tipo = diferenca > 0 ? "AJUSTE_ENTRADA" : "AJUSTE_SAIDA";
+  const auditoria = { produto_id: produtoId, produto_nome: estado.produto_nome, saldo_anterior: saldoAnterior, quantidade_fisica: quantidadeFisica, diferenca, motivo };
+  const observacao = dadosAuditoriaConferencia(auditoria);
+  const statements = [
+    env.DB.prepare(`
+      INSERT INTO estoque_operacoes (tipo, status, data_operacao, origem_tipo, origem_id,
+        chave_idempotencia, operacao_estornada_id, usuario_id, observacao, created_at)
+      SELECT ?, 'CONFIRMADA', ?, 'CARGA', carga.id, ?, NULL, ?, ?, CURRENT_TIMESTAMP
+      FROM estoque_cargas carga
+      WHERE carga.id = ? AND carga.status = 'ABERTA' AND carga.local_carga_id = ?
+        AND NOT EXISTS (SELECT 1 FROM estoque_operacoes WHERE chave_idempotencia = ?)
+        AND EXISTS (SELECT 1 FROM produtos WHERE id = ?)
+        AND (EXISTS (SELECT 1 FROM estoque_carga_itens WHERE carga_id = carga.id AND produto_id = ?)
+          OR EXISTS (SELECT 1 FROM estoque_movimentacoes WHERE local_id = carga.local_carga_id AND produto_id = ?))
+        AND ? = (SELECT COALESCE(SUM(quantidade * efeito), 0) FROM estoque_movimentacoes
+          WHERE local_id = carga.local_carga_id AND produto_id = ?)
+    `).bind(tipo, obterDataLocalCuiaba(), chave, user.vendedorId, observacao, cargaId,
+      estado.local_carga_id, chave, produtoId, produtoId, produtoId, saldoAnterior, produtoId),
+    env.DB.prepare(`
+      INSERT INTO estoque_movimentacoes (operacao_id, local_id, produto_id, carga_id,
+        carga_item_id, visita_id, visita_item_id, quantidade, efeito, created_at)
+      VALUES (COALESCE((SELECT id FROM estoque_operacoes WHERE chave_idempotencia = ?), 0),
+        ?, ?, ?, (SELECT id FROM estoque_carga_itens WHERE carga_id = ? AND produto_id = ?),
+        NULL, NULL, ?, ?, CURRENT_TIMESTAMP)
+    `).bind(chave, estado.local_carga_id, produtoId, cargaId, cargaId, produtoId,
+      Math.abs(diferenca), Math.sign(diferenca)),
+  ];
+  try {
+    await env.DB.batch(statements);
+  } catch (err) {
+    const concorrente = await carregarConferenciaCargaPorChave(env, chave);
+    const esperado = { cargaId, localId: Number(estado.local_carga_id), produtoId, quantidadeFisica, saldoAnterior, diferenca, motivo, tipo };
+    if (concorrente) {
+      if (!conferenciaCargaCompativel(concorrente, esperado)) return json({ error: "A chave de idempotência já foi usada com conteúdo diferente." }, 409);
+      return json({ success: true, idempotente: true, sem_ajuste: false, conferencia: concorrente });
+    }
+    return json({ error: "O estado da carga ou o saldo mudou. Atualize o detalhe e confira novamente." }, 409);
+  }
+  const conferencia = await carregarConferenciaCargaPorChave(env, chave);
+  if (!conferencia) throw new Error("A conferência não foi confirmada após a transação.");
+  return json({ success: true, idempotente: false, sem_ajuste: false, saldo_anterior: saldoAnterior, saldo_atual: quantidadeFisica, diferenca, conferencia }, 201);
+}
+
 async function listarVendedores(env, user) {
   if (user.role !== "admin") {
     return json({ error: "Acesso restrito ao administrador" }, 403);
@@ -3875,6 +4031,9 @@ if (url.pathname === "/api/sync" && request.method === "POST") {
     }
     if (/^\/api\/estoque\/cargas\/\d+\/cancelamento$/.test(url.pathname) && request.method === "POST") {
       return cancelarCargaVendedor(request, env, user, Number(url.pathname.split("/")[4]));
+    }
+    if (/^\/api\/estoque\/cargas\/\d+\/conferencia$/.test(url.pathname) && request.method === "POST") {
+      return registrarConferenciaCarga(request, env, user, Number(url.pathname.split("/")[4]));
     }
     if (/^\/api\/estoque\/cargas\/\d+$/.test(url.pathname) && request.method === "GET") {
       return obterCargaVendedor(env, user, Number(url.pathname.split("/").pop()));
