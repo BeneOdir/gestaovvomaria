@@ -2746,6 +2746,40 @@ async function consultarEstoqueCentral(env, user) {
   return json({ local, inicializacao_necessaria: false, produtos });
 }
 
+async function consultarDisponibilidadeEstoqueCentral(request, env, user) {
+  if (!usuarioTemRole(user, "admin", "operacao", "vendedor")) return acessoNegado();
+  const url = new URL(request.url);
+  const parametros = [...url.searchParams.keys()];
+  const valoresProduto = url.searchParams.getAll("produto_id");
+  if (parametros.length !== 1 || parametros[0] !== "produto_id" || valoresProduto.length !== 1
+    || !/^\d+$/.test(valoresProduto[0])) {
+    return json({ error: "Informe exatamente um produto_id inteiro positivo." }, 400);
+  }
+  const produtoId = Number(valoresProduto[0]);
+  if (!Number.isSafeInteger(produtoId) || produtoId <= 0) return json({ error: "Produto inválido." }, 400);
+  const disponibilidade = await env.DB.prepare(`
+    SELECT produto.id AS produto_id, produto.nome AS produto_nome,
+      COALESCE(SUM(movimento.quantidade * movimento.efeito), 0) AS saldo_oficial
+    FROM produtos produto
+    CROSS JOIN estoque_locais local
+    LEFT JOIN estoque_movimentacoes movimento
+      ON movimento.local_id = local.id AND movimento.produto_id = produto.id
+    WHERE produto.id = ? AND produto.ativo = 'ativo'
+      AND local.tipo = 'CENTRAL' AND local.ativo = 1
+    GROUP BY produto.id, produto.nome
+  `).bind(produtoId).first();
+  if (!disponibilidade) return json({ error: "Produto ativo não encontrado." }, 404);
+  const saldoOficial = Number(disponibilidade.saldo_oficial || 0);
+  const quantidadeDisponivel = Math.max(saldoOficial, 0);
+  return json({
+    produto_id: Number(disponibilidade.produto_id),
+    produto_nome: disponibilidade.produto_nome,
+    quantidade_disponivel: quantidadeDisponivel,
+    situacao: quantidadeDisponivel > 0 ? "DISPONIVEL" : "SEM_ESTOQUE",
+    consultado_em: new Date().toISOString(),
+  });
+}
+
 async function listarMovimentacoesEstoque(request, env, user) {
   if (!acessoEstoquePermitido(user)) return acessoNegado();
 
@@ -4023,6 +4057,7 @@ if (url.pathname === "/api/sync" && request.method === "POST") {
     if (url.pathname === "/api/estoque/inventario-inicial" && request.method === "POST") return registrarInventarioInicial(request, env, user);
     if (url.pathname === "/api/estoque/entradas" && request.method === "POST") return registrarEntradaEstoque(request, env, user);
     if (url.pathname === "/api/estoque/ajustes" && request.method === "POST") return registrarAjusteEstoque(request, env, user);
+    if (url.pathname === "/api/estoque/disponibilidade" && request.method === "GET") return consultarDisponibilidadeEstoqueCentral(request, env, user);
     if (url.pathname === "/api/estoque/cargas/vendedores" && request.method === "GET") return listarVendedoresCarga(env, user);
     if (url.pathname === "/api/estoque/cargas" && request.method === "POST") return registrarCargaVendedor(request, env, user);
     if (url.pathname === "/api/estoque/cargas" && request.method === "GET") return listarCargasVendedor(request, env, user);

@@ -244,6 +244,11 @@
     .pagamento-linha{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;margin-bottom:9px}
     .pagamento-linha .remove-item{margin-bottom:2px}
     .pagamento-resumo{line-height:1.7;text-align:left}
+    .consulta-estoque{margin:16px 0;border:1px solid #FED7AA;border-radius:18px;background:#FFFBEB;padding:12px}
+    .consulta-estoque summary{cursor:pointer;font-weight:900;color:#78350F;padding:4px}
+    .consulta-estoque-conteudo{padding-top:12px}
+    .consulta-resultado{display:none;margin-top:12px;padding:13px;border-radius:16px;background:#FFF7ED;color:#7C2D12;font-weight:800;line-height:1.45}
+    .consulta-resultado.show{display:block}.consulta-resultado.sem-estoque{background:#FEE2E2;color:#991B1B}
     @media(max-width:620px){
       body{padding:10px}
       .container{padding:16px;border-radius:22px}
@@ -279,6 +284,16 @@
     <button class="btn dark" id="navRelatorio" type="button" onclick="location.href='relatorio-dia.html'">Relatório do dia</button>
     <button class="btn soft" id="navProdutos" type="button" onclick="location.href='produtos.html'">Produtos</button>
   </div>
+
+  <details class="consulta-estoque">
+    <summary>Consultar estoque da fábrica</summary>
+    <div class="consulta-estoque-conteudo">
+      <div class="group"><label for="produtoConsultaEstoque">Produto</label><select id="produtoConsultaEstoque"><option value="">Carregando produtos...</option></select></div>
+      <button class="btn soft" type="button" id="btnConsultarEstoque">Consultar disponibilidade</button>
+      <div id="resultadoConsultaEstoque" class="consulta-resultado" aria-live="polite"></div>
+      <p class="small" style="margin-top:10px">Consulta informativa. A reposição deve ser confirmada com a fábrica.</p>
+    </div>
+  </details>
 
   <form id="visitaForm">
     <div class="search-box">
@@ -1134,6 +1149,28 @@ function optionProdutos(){
   `).join("");
 }
 
+function preencherProdutosConsulta(){
+  document.getElementById("produtoConsultaEstoque").innerHTML = '<option value="">Selecione um produto...</option>' +
+    produtos.map(p => `<option value="${Number(p.id)}">${String(p.nome || "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}</option>`).join("");
+}
+
+function limparConsultaEstoque(){
+  const resultado=document.getElementById("resultadoConsultaEstoque");
+  resultado.textContent="";resultado.className="consulta-resultado";
+}
+
+async function consultarDisponibilidadeEstoque(){
+  const produtoId=Number(document.getElementById("produtoConsultaEstoque").value||0),botao=document.getElementById("btnConsultarEstoque"),resultado=document.getElementById("resultadoConsultaEstoque");
+  limparConsultaEstoque();
+  if(!Number.isInteger(produtoId)||produtoId<=0){resultado.textContent="Selecione um produto.";resultado.className="consulta-resultado show sem-estoque";return}
+  try{
+    botao.disabled=true;botao.textContent="Consultando...";
+    const disponibilidade=await api(`/api/estoque/disponibilidade?produto_id=${encodeURIComponent(produtoId)}`),quantidade=Number(disponibilidade.quantidade_disponivel||0),unidade=quantidade===1?"fardo":"fardos";
+    resultado.textContent=disponibilidade.situacao==="DISPONIVEL"?`${disponibilidade.produto_nome} — ${quantidade.toLocaleString("pt-BR",{maximumFractionDigits:3})} ${unidade} disponíveis na fábrica.`:`${disponibilidade.produto_nome} — sem estoque disponível na fábrica.`;
+    resultado.className=`consulta-resultado show${disponibilidade.situacao==="SEM_ESTOQUE"?" sem-estoque":""}`;
+  }catch(err){resultado.textContent=err.message;resultado.className="consulta-resultado show sem-estoque"}finally{botao.disabled=false;botao.textContent="Consultar disponibilidade"}
+}
+
 function addItem(){
   const div = document.createElement("div");
   div.className = "item";
@@ -1290,6 +1327,7 @@ async function carregar(){
       ...clientesAvulsos.map(c => ({ ...c, tipo_origem: "avulso" }))
     ];
     produtos = listaProdutos;
+    preencherProdutosConsulta();
 
     renderizarClientes(clientes, false);
 
@@ -1360,6 +1398,8 @@ document.addEventListener("click", event => {
 });
 
 document.getElementById("btnAddItem").addEventListener("click", addItem);
+document.getElementById("produtoConsultaEstoque").addEventListener("change",limparConsultaEstoque);
+document.getElementById("btnConsultarEstoque").addEventListener("click",consultarDisponibilidadeEstoque);
 document.getElementById("btnAddPagamento").addEventListener("click", ()=>adicionarPagamento());
 document.getElementById("desconto").addEventListener("input", atualizarTotal);
 aplicarMascaraMoeda(document.getElementById("desconto"));
