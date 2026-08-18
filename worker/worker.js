@@ -1576,12 +1576,30 @@ function acessoProducaoPermitido(user) {
   return usuarioTemRole(user, "admin", "operacao");
 }
 
+function normalizarAmbienteProducao(valor, user) {
+  const informado = normalizeText(valor).toUpperCase();
+  const ambiente = informado || "OFICIAL";
+  if (ambiente !== "OFICIAL" && ambiente !== "TESTE") {
+    return { resposta: json({ error: "Ambiente de Produção inválido. Use OFICIAL ou TESTE." }, 400) };
+  }
+  if (ambiente === "TESTE" && !usuarioTemRole(user, "admin")) {
+    return { resposta: json({ error: "Somente administrador pode utilizar Produção Teste." }, 403) };
+  }
+  return { ambiente };
+}
+
+function ambienteProducaoDaUrl(request, user) {
+  return normalizarAmbienteProducao(new URL(request.url).searchParams.get("ambiente"), user);
+}
+
 function arredondarMoeda(valor) {
   return Math.round((Number(valor) + Number.EPSILON) * 100) / 100;
 }
 
-async function listarParametrosProducao(env, user) {
+async function listarParametrosProducao(request, env, user) {
   if (!acessoProducaoPermitido(user)) return acessoNegado();
+  const contrato = ambienteProducaoDaUrl(request, user);
+  if (contrato.resposta) return contrato.resposta;
 
   const resultado = await env.DB.prepare(`
     SELECT
@@ -1606,6 +1624,11 @@ async function salvarParametroProducao(request, env, user, produtoId) {
   if (!Number.isInteger(produtoId) || produtoId <= 0) return json({ error: "Produto inválido." }, 400);
 
   const dados = await request.json();
+  const contrato = normalizarAmbienteProducao(dados.ambiente, user);
+  if (contrato.resposta) return contrato.resposta;
+  if (contrato.ambiente === "TESTE") {
+    return json({ error: "Parâmetros oficiais não podem ser alterados no ambiente de TESTE." }, 409);
+  }
   const pacotesPorFardo = Number(dados.pacotes_por_fardo);
   const valorPorPacote = Number(dados.valor_por_pacote);
   const ativo = dados.ativo === false || dados.ativo === 0 || dados.ativo === "0" ? 0 : 1;
@@ -1642,10 +1665,10 @@ async function salvarParametroProducao(request, env, user, produtoId) {
   return json({ success: true, produto, parametro });
 }
 
-async function buscarRegistroProducaoPorChave(env, chave) {
+async function buscarRegistroProducaoPorChave(env, chave, ambiente = "OFICIAL") {
   return env.DB.prepare(`
-    SELECT * FROM producao_registros WHERE chave_idempotencia = ?
-  `).bind(chave).first();
+    SELECT * FROM producao_registros WHERE chave_idempotencia = ? AND ambiente = ?
+  `).bind(chave, ambiente).first();
 }
 
 async function buscarEntradaEstoqueDaProducao(env, producaoId) {
@@ -1669,6 +1692,9 @@ async function registrarProducao(request, env, user) {
   if (!acessoProducaoPermitido(user)) return acessoNegado();
 
   const dados = await request.json();
+  const contrato = normalizarAmbienteProducao(dados.ambiente, user);
+  if (contrato.resposta) return contrato.resposta;
+  if (contrato.ambiente === "TESTE") return json({ error: "Produção TESTE deve utilizar o fluxo de lotes V1.1." }, 409);
   const produtoId = Number(dados.produto_id || 0);
   const quantidadeFardos = Number(dados.quantidade_fardos);
   const dataProducao = normalizeText(dados.data_producao || obterDataLocalCuiaba());
@@ -1790,6 +1816,9 @@ async function listarRegistrosProducao(request, env, user) {
   if (!acessoProducaoPermitido(user)) return acessoNegado();
 
   const url = new URL(request.url);
+  const contrato = normalizarAmbienteProducao(url.searchParams.get("ambiente"), user);
+  if (contrato.resposta) return contrato.resposta;
+  const ambiente = contrato.ambiente;
   const produtoId = Number(url.searchParams.get("produto_id") || 0);
   const usuarioId = Number(url.searchParams.get("usuario_id") || 0);
   const dataInicial = normalizeText(url.searchParams.get("data_inicial"));
@@ -1801,8 +1830,8 @@ async function listarRegistrosProducao(request, env, user) {
   if (dataFinal && !dataOperacionalValida(dataFinal)) return json({ error: "Data final inválida." }, 400);
   if (dataInicial && dataFinal && dataInicial > dataFinal) return json({ error: "Período inválido." }, 400);
 
-  const filtros = ["1 = 1"];
-  const parametros = [];
+  const filtros = ["registro.ambiente = ?"];
+  const parametros = [ambiente];
   if (produtoId) { filtros.push("registro.produto_id = ?"); parametros.push(produtoId); }
   if (usuarioId) { filtros.push("registro.usuario_id = ?"); parametros.push(usuarioId); }
   if (dataInicial) { filtros.push("registro.data_producao >= ?"); parametros.push(dataInicial); }
@@ -1815,7 +1844,7 @@ async function listarRegistrosProducao(request, env, user) {
       registro.data_producao, registro.quantidade_fardos,
       registro.pacotes_por_fardo_snapshot, registro.quantidade_pacotes,
       registro.valor_por_pacote_snapshot, registro.valor_producao,
-      registro.observacao, registro.created_at
+      registro.observacao, registro.ambiente, registro.created_at
     FROM producao_registros registro
     INNER JOIN produtos p ON p.id = registro.produto_id
     LEFT JOIN vendedores v ON v.id = registro.usuario_id
@@ -1835,8 +1864,10 @@ function chaveItemLoteProducao(chaveCliente, produtoId) {
   return `LOTE_PRODUCAO:${chaveCliente}:PRODUTO:${produtoId}`;
 }
 
-async function listarReceitasBaseProducao(env, user) {
+async function listarReceitasBaseProducao(request, env, user) {
   if (!acessoProducaoPermitido(user)) return acessoNegado();
+  const contrato = ambienteProducaoDaUrl(request, user);
+  if (contrato.resposta) return contrato.resposta;
 
   const resultado = await env.DB.prepare(`
     SELECT id, nome, versao, ativo, created_at, updated_at
@@ -1848,7 +1879,7 @@ async function listarReceitasBaseProducao(env, user) {
   return json(resultado.results || []);
 }
 
-async function buscarLoteProducaoPorChave(env, chave) {
+async function buscarLoteProducaoPorChave(env, chave, ambiente) {
   return env.DB.prepare(`
     SELECT
       lote.id, lote.receita_base_id, receita.nome AS receita_base_nome,
@@ -1857,15 +1888,15 @@ async function buscarLoteProducaoPorChave(env, chave) {
       lote.usuario_id, usuario.nome AS usuario_nome,
       lote.observacao, lote.chave_idempotencia, lote.created_at,
       lote.fluxo, lote.status, lote.encerrado_em, lote.encerrado_por,
-      lote.chave_encerramento, lote.motivo_encerramento
+      lote.chave_encerramento, lote.motivo_encerramento, lote.ambiente
     FROM producao_lotes lote
     INNER JOIN producao_receitas_base receita ON receita.id = lote.receita_base_id
     LEFT JOIN vendedores usuario ON usuario.id = lote.usuario_id
-    WHERE lote.chave_idempotencia = ?
-  `).bind(chave).first();
+    WHERE lote.chave_idempotencia = ?${ambiente ? " AND lote.ambiente = ?" : ""}
+  `).bind(...(ambiente ? [chave, ambiente] : [chave])).first();
 }
 
-async function buscarLoteProducaoPorId(env, loteId) {
+async function buscarLoteProducaoPorId(env, loteId, ambiente) {
   return env.DB.prepare(`
     SELECT
       lote.id, lote.receita_base_id, receita.nome AS receita_base_nome,
@@ -1874,15 +1905,15 @@ async function buscarLoteProducaoPorId(env, loteId) {
       lote.usuario_id, usuario.nome AS usuario_nome,
       lote.observacao, lote.chave_idempotencia, lote.created_at,
       lote.fluxo, lote.status, lote.encerrado_em, lote.encerrado_por,
-      lote.chave_encerramento, lote.motivo_encerramento
+      lote.chave_encerramento, lote.motivo_encerramento, lote.ambiente
     FROM producao_lotes lote
     INNER JOIN producao_receitas_base receita ON receita.id = lote.receita_base_id
     LEFT JOIN vendedores usuario ON usuario.id = lote.usuario_id
-    WHERE lote.id = ?
-  `).bind(loteId).first();
+    WHERE lote.id = ?${ambiente ? " AND lote.ambiente = ?" : ""}
+  `).bind(...(ambiente ? [loteId, ambiente] : [loteId])).first();
 }
 
-async function carregarItensLoteProducao(env, loteId) {
+async function carregarItensLoteProducao(env, loteId, ambiente) {
   const resultado = await env.DB.prepare(`
     SELECT
       registro.id, registro.lote_id, registro.produto_id,
@@ -1896,6 +1927,7 @@ async function carregarItensLoteProducao(env, loteId) {
       registro.valor_producao,
       registro.observacao,
       registro.chave_idempotencia,
+      registro.ambiente,
       registro.created_at,
       (
         SELECT COUNT(*)
@@ -1969,19 +2001,19 @@ async function carregarItensLoteProducao(env, loteId) {
     FROM producao_registros registro
     INNER JOIN produtos produto ON produto.id = registro.produto_id
     LEFT JOIN vendedores usuario ON usuario.id = registro.usuario_id
-    WHERE registro.lote_id = ?
+    WHERE registro.lote_id = ? AND registro.ambiente = ?
     ORDER BY registro.id
-  `).bind(loteId).all();
+  `).bind(loteId, ambiente).all();
 
   return resultado.results || [];
 }
 
-async function carregarLoteProducaoCompleto(env, identificador, porChave = false) {
+async function carregarLoteProducaoCompleto(env, identificador, porChave = false, ambiente) {
   const lote = porChave
-    ? await buscarLoteProducaoPorChave(env, identificador)
-    : await buscarLoteProducaoPorId(env, identificador);
+    ? await buscarLoteProducaoPorChave(env, identificador, ambiente)
+    : await buscarLoteProducaoPorId(env, identificador, ambiente);
   if (!lote) return null;
-  const itens = await carregarItensLoteProducao(env, lote.id);
+  const itens = await carregarItensLoteProducao(env, lote.id, lote.ambiente);
   const vinculados = await env.DB.prepare(`
     SELECT vinculo.id, vinculo.lote_id, vinculo.produto_id,
       produto.nome AS produto_nome,
@@ -2062,6 +2094,9 @@ async function registrarLoteProducao(request, env, user) {
   if (!acessoProducaoPermitido(user)) return acessoNegado();
 
   const dados = await request.json();
+  const contrato = normalizarAmbienteProducao(dados.ambiente, user);
+  if (contrato.resposta) return contrato.resposta;
+  if (contrato.ambiente === "TESTE") return json({ error: "Produção TESTE deve utilizar a abertura gradual V1.1." }, 409);
   const receitaBaseId = Number(dados.receita_base_id || 0);
   const quantidadeInformada = dados.quantidade_receitas_base === null
     || dados.quantidade_receitas_base === undefined
@@ -2243,6 +2278,10 @@ async function registrarLoteProducao(request, env, user) {
       if (validacao) return respostaConflitoLote(validacao, concorrente);
       return json({ success: true, idempotente: true, lote: concorrente });
     }
+    const mensagem = String(err?.message || "");
+    if (mensagem.includes("CHECK constraint failed") || mensagem.includes("FOREIGN KEY constraint failed") || mensagem.includes("NOT NULL constraint failed")) {
+      return json({ error: "O lote não foi aberto porque os dados não atendem à estrutura exigida. Nenhum lote ou vínculo parcial foi mantido.", detalhe: mensagem }, 409);
+    }
     throw err;
   }
 
@@ -2258,6 +2297,9 @@ async function listarLotesProducao(request, env, user) {
   if (!acessoProducaoPermitido(user)) return acessoNegado();
 
   const url = new URL(request.url);
+  const contrato = normalizarAmbienteProducao(url.searchParams.get("ambiente"), user);
+  if (contrato.resposta) return contrato.resposta;
+  const ambiente = contrato.ambiente;
   const receitaBaseId = Number(url.searchParams.get("receita_base_id") || 0);
   const produtoId = Number(url.searchParams.get("produto_id") || 0);
   const usuarioId = Number(url.searchParams.get("usuario_id") || 0);
@@ -2275,8 +2317,8 @@ async function listarLotesProducao(request, env, user) {
   if (dataFinal && !dataOperacionalValida(dataFinal)) return json({ error: "Data final inválida." }, 400);
   if (dataInicial && dataFinal && dataInicial > dataFinal) return json({ error: "Período inválido." }, 400);
 
-  const filtros = ["1 = 1"];
-  const parametros = [];
+  const filtros = ["lote.ambiente = ?"];
+  const parametros = [ambiente];
   if (receitaBaseId) { filtros.push("lote.receita_base_id = ?"); parametros.push(receitaBaseId); }
   if (usuarioId) { filtros.push("lote.usuario_id = ?"); parametros.push(usuarioId); }
   if (dataInicial) { filtros.push("lote.data_producao >= ?"); parametros.push(dataInicial); }
@@ -2299,7 +2341,7 @@ async function listarLotesProducao(request, env, user) {
       lote.usuario_id, usuario.nome AS usuario_nome,
       lote.observacao, lote.chave_idempotencia, lote.created_at,
       lote.fluxo, lote.status, lote.encerrado_em, lote.encerrado_por,
-      lote.motivo_encerramento,
+      lote.motivo_encerramento, lote.ambiente,
       COUNT(DISTINCT registro.produto_id) AS total_produtos,
       (SELECT COUNT(*) FROM producao_lote_produtos vinculo WHERE vinculo.lote_id = lote.id) AS total_produtos_vinculados,
       COALESCE(SUM(registro.quantidade_fardos), 0) AS total_fardos,
@@ -2309,7 +2351,7 @@ async function listarLotesProducao(request, env, user) {
     FROM producao_lotes lote
     INNER JOIN producao_receitas_base receita ON receita.id = lote.receita_base_id
     LEFT JOIN vendedores usuario ON usuario.id = lote.usuario_id
-    LEFT JOIN producao_registros registro ON registro.lote_id = lote.id
+    LEFT JOIN producao_registros registro ON registro.lote_id = lote.id AND registro.ambiente = lote.ambiente
     WHERE ${filtros.join(" AND ")}
     GROUP BY lote.id, receita.nome, receita.versao, usuario.nome
     ORDER BY lote.data_producao DESC, lote.id DESC
@@ -2319,35 +2361,38 @@ async function listarLotesProducao(request, env, user) {
   return json(resultado.results || []);
 }
 
-async function obterLoteProducao(env, user, loteId) {
+async function obterLoteProducao(request, env, user, loteId) {
   if (!acessoProducaoPermitido(user)) return acessoNegado();
   if (!Number.isInteger(loteId) || loteId <= 0) return json({ error: "Lote inválido." }, 400);
+  const contrato = ambienteProducaoDaUrl(request, user);
+  if (contrato.resposta) return contrato.resposta;
 
-  const lote = await carregarLoteProducaoCompleto(env, loteId);
+  const lote = await carregarLoteProducaoCompleto(env, loteId, false, contrato.ambiente);
   if (!lote) return json({ error: "Lote de Produção não encontrado." }, 404);
   return json(lote);
 }
 
-function chaveAberturaLoteV11(chaveCliente) {
-  return `LOTE_PRODUCAO_V1_1:${chaveCliente}`;
+function chaveAberturaLoteV11(ambiente, chaveCliente) {
+  return `LOTE_PRODUCAO_V1_1:${ambiente}:${chaveCliente}`;
 }
 
-function chaveLancamentoLoteV11(loteId, chaveCliente) {
-  return `LANCAMENTO_PRODUCAO:${loteId}:${chaveCliente}`;
+function chaveLancamentoLoteV11(ambiente, loteId, chaveCliente) {
+  return `LANCAMENTO_PRODUCAO:${ambiente}:${loteId}:${chaveCliente}`;
 }
 
-async function carregarVinculosAberturaV11(env, loteId, chaveCliente) {
+async function carregarVinculosAberturaV11(env, loteId, ambiente, chaveCliente) {
   const resultado = await env.DB.prepare(`
     SELECT produto_id, pacotes_por_fardo_snapshot, valor_por_pacote_snapshot
     FROM producao_lote_produtos
     WHERE lote_id = ? AND chave_idempotencia LIKE ?
     ORDER BY produto_id
-  `).bind(loteId, `LOTE_PRODUTO_ABERTURA:${chaveCliente}:PRODUTO:%`).all();
+  `).bind(loteId, `LOTE_PRODUTO_ABERTURA:${ambiente}:${chaveCliente}:PRODUTO:%`).all();
   return resultado.results || [];
 }
 
 function validarAberturaV11Existente(lote, vinculos, esperado) {
   if (lote.fluxo !== "V1_1_GRADUAL"
+    || lote.ambiente !== esperado.ambiente
     || Number(lote.receita_base_id) !== esperado.receitaBaseId
     || !compararNumeroProducao(lote.quantidade_receitas_base, esperado.quantidadeReceitasBase)
     || lote.data_producao !== esperado.dataProducao
@@ -2356,6 +2401,13 @@ function validarAberturaV11Existente(lote, vinculos, esperado) {
     return { tipo: "DIVERGENTE", mensagem: "A chave de abertura já foi utilizada com dados diferentes." };
   }
   if (vinculos.length !== esperado.produtos.length) return { tipo: "INCOMPLETO", mensagem: "A abertura existente possui produtos incompletos." };
+  const vinculoInvalido = vinculos.some(vinculo =>
+    !Number.isInteger(Number(vinculo.pacotes_por_fardo_snapshot))
+    || Number(vinculo.pacotes_por_fardo_snapshot) <= 0
+    || !Number.isFinite(Number(vinculo.valor_por_pacote_snapshot))
+    || Number(vinculo.valor_por_pacote_snapshot) < 0
+  );
+  if (vinculoInvalido) return { tipo: "INCOMPLETO", mensagem: "A abertura existente possui snapshots de parâmetros inválidos." };
   const ids = new Set(vinculos.map(vinculo => Number(vinculo.produto_id)));
   if (esperado.produtos.some(produtoId => !ids.has(produtoId))) return { tipo: "DIVERGENTE", mensagem: "A abertura existente possui produtos diferentes." };
   return null;
@@ -2364,6 +2416,9 @@ function validarAberturaV11Existente(lote, vinculos, esperado) {
 async function abrirLoteProducaoV11(request, env, user) {
   if (!acessoProducaoPermitido(user)) return acessoNegado();
   const dados = await request.json();
+  const contrato = normalizarAmbienteProducao(dados.ambiente, user);
+  if (contrato.resposta) return contrato.resposta;
+  const ambiente = contrato.ambiente;
   const receitaBaseId = Number(dados.receita_base_id || 0);
   const quantidadeReceitasBase = Number(dados.quantidade_receitas_base);
   const dataProducao = normalizeText(dados.data_producao || obterDataLocalCuiaba());
@@ -2379,11 +2434,11 @@ async function abrirLoteProducaoV11(request, env, user) {
   if (produtos.some(id => !Number.isInteger(id) || id <= 0)) return json({ error: "Todos os produtos devem ser válidos." }, 400);
   if (new Set(produtos).size !== produtos.length) return json({ error: "O mesmo produto não pode ser vinculado duas vezes." }, 400);
 
-  const chaveLote = chaveAberturaLoteV11(chaveCliente);
-  const esperado = { receitaBaseId, quantidadeReceitasBase, dataProducao, observacao, usuarioId: Number(user.vendedorId), produtos };
-  const existente = await carregarLoteProducaoCompleto(env, chaveLote, true);
+  const chaveLote = chaveAberturaLoteV11(ambiente, chaveCliente);
+  const esperado = { ambiente, receitaBaseId, quantidadeReceitasBase, dataProducao, observacao, usuarioId: Number(user.vendedorId), produtos };
+  const existente = await carregarLoteProducaoCompleto(env, chaveLote, true, ambiente);
   if (existente) {
-    const vinculos = await carregarVinculosAberturaV11(env, existente.id, chaveCliente);
+    const vinculos = await carregarVinculosAberturaV11(env, existente.id, ambiente, chaveCliente);
     const validacao = validarAberturaV11Existente(existente, vinculos, esperado);
     if (validacao) return respostaConflitoLote(validacao, existente);
     return json({ success: true, idempotente: true, lote: existente });
@@ -2398,47 +2453,57 @@ async function abrirLoteProducaoV11(request, env, user) {
     WHERE produto.id = ? AND produto.ativo = 'ativo'
   `).bind(produtoId).first()));
   if (parametros.some(item => !item)) return json({ error: "Todos os produtos devem estar ativos e possuir parâmetros de Produção ativos." }, 409);
+  if (parametros.some(item =>
+    !Number.isInteger(Number(item.pacotes_por_fardo))
+    || Number(item.pacotes_por_fardo) <= 0
+    || !Number.isFinite(Number(item.valor_por_pacote))
+    || Number(item.valor_por_pacote) < 0
+  )) return json({ error: "Existem parâmetros de Produção inválidos para os produtos selecionados." }, 409);
 
   const statements = [env.DB.prepare(`
     INSERT INTO producao_lotes (
       receita_base_id, quantidade_receitas_base, data_producao,
       usuario_id, observacao, chave_idempotencia, created_at,
-      fluxo, status
+      fluxo, status, ambiente
     )
     SELECT receita.id, ?, ?, usuario.id, ?, ?, CURRENT_TIMESTAMP,
-      'V1_1_GRADUAL', 'ABERTO'
+      'V1_1_GRADUAL', 'ABERTO', ?
     FROM producao_receitas_base receita
     INNER JOIN vendedores usuario ON usuario.id = ?
     WHERE receita.id = ? AND receita.ativo = 1
       AND usuario.status = 'ativo' AND usuario.role IN ('admin', 'operacao')
-  `).bind(quantidadeReceitasBase, dataProducao, observacao, chaveLote, user.vendedorId, receitaBaseId)];
+  `).bind(quantidadeReceitasBase, dataProducao, observacao, chaveLote, ambiente, user.vendedorId, receitaBaseId)];
   for (const produtoId of produtos) statements.push(env.DB.prepare(`
     INSERT INTO producao_lote_produtos (
       lote_id, produto_id, pacotes_por_fardo_snapshot,
       valor_por_pacote_snapshot, incluido_por, observacao,
       chave_idempotencia, created_at
     ) VALUES (
-      COALESCE((SELECT id FROM producao_lotes WHERE chave_idempotencia = ? AND fluxo = 'V1_1_GRADUAL' AND status = 'ABERTO'), 0),
+      COALESCE((SELECT id FROM producao_lotes WHERE chave_idempotencia = ? AND ambiente = ? AND fluxo = 'V1_1_GRADUAL' AND status = 'ABERTO'), 0),
       COALESCE((SELECT produto.id FROM produtos produto INNER JOIN producao_parametros_produto parametro ON parametro.produto_id = produto.id AND parametro.ativo = 1 WHERE produto.id = ? AND produto.ativo = 'ativo'), 0),
       COALESCE((SELECT parametro.pacotes_por_fardo FROM produtos produto INNER JOIN producao_parametros_produto parametro ON parametro.produto_id = produto.id AND parametro.ativo = 1 WHERE produto.id = ? AND produto.ativo = 'ativo'), 0),
       COALESCE((SELECT parametro.valor_por_pacote FROM produtos produto INNER JOIN producao_parametros_produto parametro ON parametro.produto_id = produto.id AND parametro.ativo = 1 WHERE produto.id = ? AND produto.ativo = 'ativo'), -1),
       ?, 'Vinculado na abertura do lote', ?, CURRENT_TIMESTAMP
     )
-  `).bind(chaveLote, produtoId, produtoId, produtoId, user.vendedorId, `LOTE_PRODUTO_ABERTURA:${chaveCliente}:PRODUTO:${produtoId}`));
+  `).bind(chaveLote, ambiente, produtoId, produtoId, produtoId, user.vendedorId, `LOTE_PRODUTO_ABERTURA:${ambiente}:${chaveCliente}:PRODUTO:${produtoId}`));
   try {
     await env.DB.batch(statements);
   } catch (err) {
-    const concorrente = await carregarLoteProducaoCompleto(env, chaveLote, true);
+    const concorrente = await carregarLoteProducaoCompleto(env, chaveLote, true, ambiente);
     if (concorrente) {
-      const vinculos = await carregarVinculosAberturaV11(env, concorrente.id, chaveCliente);
+      const vinculos = await carregarVinculosAberturaV11(env, concorrente.id, ambiente, chaveCliente);
       const validacao = validarAberturaV11Existente(concorrente, vinculos, esperado);
       if (validacao) return respostaConflitoLote(validacao, concorrente);
       return json({ success: true, idempotente: true, lote: concorrente });
     }
+    const mensagem = String(err?.message || "");
+    if (mensagem.includes("CHECK constraint failed") || mensagem.includes("FOREIGN KEY constraint failed") || mensagem.includes("NOT NULL constraint failed")) {
+      return json({ error: "O lote não foi aberto porque os dados não atendem à estrutura exigida. Nenhum lote ou vínculo parcial foi mantido.", detalhe: mensagem }, 409);
+    }
     throw err;
   }
-  const lote = await carregarLoteProducaoCompleto(env, chaveLote, true);
-  const vinculos = lote ? await carregarVinculosAberturaV11(env, lote.id, chaveCliente) : [];
+  const lote = await carregarLoteProducaoCompleto(env, chaveLote, true, ambiente);
+  const vinculos = lote ? await carregarVinculosAberturaV11(env, lote.id, ambiente, chaveCliente) : [];
   const validacao = lote ? validarAberturaV11Existente(lote, vinculos, esperado) : { tipo: "INCOMPLETO", mensagem: "O lote não foi criado." };
   if (validacao) return json({ error: "A abertura do lote ficou incompleta. Solicite auditoria.", detalhe: validacao.mensagem }, 409);
   if (lote.itens.length) return json({ error: "A abertura criou lançamentos indevidos. Solicite auditoria." }, 409);
@@ -2449,17 +2514,22 @@ async function incluirProdutoLoteV11(request, env, user, loteId) {
   if (!acessoProducaoPermitido(user)) return acessoNegado();
   if (!Number.isInteger(loteId) || loteId <= 0) return json({ error: "Lote inválido." }, 400);
   const dados = await request.json(), produtoId = Number(dados.produto_id || 0);
+  const contrato = normalizarAmbienteProducao(dados.ambiente, user);
+  if (contrato.resposta) return contrato.resposta;
+  const ambiente = contrato.ambiente;
   const observacao = normalizeText(dados.observacao), chaveCliente = normalizeText(dados.chave_idempotencia);
   if (!Number.isInteger(produtoId) || produtoId <= 0) return json({ error: "Produto inválido." }, 400);
   if (!chaveCliente || chaveCliente.length > 120) return json({ error: "Chave de idempotência inválida." }, 400);
-  const chave = `INCLUSAO_PRODUTO_LOTE:${loteId}:${chaveCliente}`;
+  const loteSemFiltro = await buscarLoteProducaoPorId(env, loteId);
+  if (!loteSemFiltro) return json({ error: "Lote não encontrado." }, 404);
+  if (loteSemFiltro.ambiente !== ambiente) return json({ error: "O lote pertence a outro ambiente de Produção." }, 409);
+  const lote = loteSemFiltro;
+  const chave = `INCLUSAO_PRODUTO_LOTE:${ambiente}:${loteId}:${chaveCliente}`;
   const existente = await env.DB.prepare("SELECT * FROM producao_lote_produtos WHERE chave_idempotencia = ?").bind(chave).first();
   if (existente) {
     if (Number(existente.lote_id) !== loteId || Number(existente.produto_id) !== produtoId || normalizeText(existente.observacao) !== observacao) return json({ error: "A chave de inclusão já foi usada com dados diferentes." }, 409);
     return json({ success: true, idempotente: true, vinculo: existente });
   }
-  const lote = await buscarLoteProducaoPorId(env, loteId);
-  if (!lote) return json({ error: "Lote não encontrado." }, 404);
   if (lote.fluxo !== "V1_1_GRADUAL" || lote.status !== "ABERTO") return json({ error: "Somente lotes V1.1 abertos aceitam novos produtos." }, 409);
   const jaVinculado = await env.DB.prepare("SELECT id FROM producao_lote_produtos WHERE lote_id = ? AND produto_id = ?").bind(loteId, produtoId).first();
   if (jaVinculado) return json({ error: "O produto já está vinculado ao lote." }, 409);
@@ -2470,13 +2540,13 @@ async function incluirProdutoLoteV11(request, env, user, loteId) {
         valor_por_pacote_snapshot, incluido_por, observacao,
         chave_idempotencia, created_at
       ) VALUES (
-        COALESCE((SELECT id FROM producao_lotes WHERE id = ? AND fluxo = 'V1_1_GRADUAL' AND status = 'ABERTO'), 0),
+        COALESCE((SELECT id FROM producao_lotes WHERE id = ? AND ambiente = ? AND fluxo = 'V1_1_GRADUAL' AND status = 'ABERTO'), 0),
         COALESCE((SELECT produto.id FROM produtos produto INNER JOIN producao_parametros_produto parametro ON parametro.produto_id = produto.id AND parametro.ativo = 1 WHERE produto.id = ? AND produto.ativo = 'ativo'), 0),
         COALESCE((SELECT parametro.pacotes_por_fardo FROM produtos produto INNER JOIN producao_parametros_produto parametro ON parametro.produto_id = produto.id AND parametro.ativo = 1 WHERE produto.id = ? AND produto.ativo = 'ativo'), 0),
         COALESCE((SELECT parametro.valor_por_pacote FROM produtos produto INNER JOIN producao_parametros_produto parametro ON parametro.produto_id = produto.id AND parametro.ativo = 1 WHERE produto.id = ? AND produto.ativo = 'ativo'), -1),
         ?, ?, ?, CURRENT_TIMESTAMP
       )
-    `).bind(loteId, produtoId, produtoId, produtoId, user.vendedorId, observacao || null, chave)]);
+    `).bind(loteId, ambiente, produtoId, produtoId, produtoId, user.vendedorId, observacao || null, chave)]);
   } catch (err) {
     const concorrente = await env.DB.prepare("SELECT * FROM producao_lote_produtos WHERE chave_idempotencia = ?").bind(chave).first();
     if (concorrente && Number(concorrente.lote_id) === loteId && Number(concorrente.produto_id) === produtoId && normalizeText(concorrente.observacao) === observacao) return json({ success: true, idempotente: true, vinculo: concorrente });
@@ -2493,18 +2563,20 @@ async function auditarEntradaLancamentoV11(env, registroId) {
     SELECT registro.id AS registro_id, registro.lote_id, registro.produto_id,
       registro.usuario_id, registro.data_producao, registro.quantidade_fardos,
       registro.observacao, registro.chave_idempotencia, registro.confirmacao_fisica,
+      registro.ambiente,
       COUNT(DISTINCT operacao.id) AS total_operacoes,
       COUNT(movimento.id) AS total_movimentos,
       MAX(operacao.id) AS operacao_id, MAX(movimento.id) AS movimentacao_id,
+      MAX(operacao.tipo) AS operacao_tipo,
+      MAX(operacao.status) AS operacao_status,
+      MAX(operacao.chave_idempotencia) AS operacao_chave,
       MAX(movimento.local_id) AS local_id,
       MAX(movimento.produto_id) AS estoque_produto_id,
       MAX(movimento.quantidade) AS estoque_quantidade,
       MAX(movimento.efeito) AS estoque_efeito
     FROM producao_registros registro
     LEFT JOIN estoque_operacoes operacao
-      ON operacao.tipo = 'ENTRADA_PRODUCAO' AND operacao.origem_tipo = 'PRODUCAO'
-      AND operacao.origem_id = registro.id
-      AND operacao.chave_idempotencia = 'PRODUCAO:' || CAST(registro.id AS TEXT)
+      ON operacao.origem_tipo = 'PRODUCAO' AND operacao.origem_id = registro.id
     LEFT JOIN estoque_movimentacoes movimento ON movimento.operacao_id = operacao.id
     WHERE registro.id = ?
     GROUP BY registro.id
@@ -2516,10 +2588,19 @@ function validarLancamentoV11Existente(registro, esperado, localId) {
   if (Number(registro.lote_id) !== esperado.loteId || Number(registro.produto_id) !== esperado.produtoId
     || Number(registro.usuario_id) !== esperado.usuarioId || registro.data_producao !== esperado.dataMontagem
     || Number(registro.quantidade_fardos) !== esperado.quantidadeFardos
-    || normalizeText(registro.observacao) !== esperado.observacao) return { tipo: "DIVERGENTE", mensagem: "A chave do lançamento já foi usada com dados diferentes." };
+    || normalizeText(registro.observacao) !== esperado.observacao
+    || registro.ambiente !== esperado.ambiente) return { tipo: "DIVERGENTE", mensagem: "A chave do lançamento já foi usada com dados diferentes." };
+  if (esperado.ambiente === "TESTE") {
+    if (Number(registro.total_operacoes) !== 0 || Number(registro.total_movimentos) !== 0) {
+      return { tipo: "INCONSISTENTE", mensagem: "O lançamento de TESTE possui operação ou movimento de estoque e está inconsistente." };
+    }
+    return null;
+  }
   if (Number(registro.confirmacao_fisica) !== 1 || Number(registro.total_operacoes) !== 1
     || Number(registro.total_movimentos) !== 1 || Number(registro.operacao_id) <= 0
     || Number(registro.movimentacao_id) <= 0 || Number(registro.local_id) !== Number(localId)
+    || registro.operacao_tipo !== "ENTRADA_PRODUCAO" || registro.operacao_status !== "CONFIRMADA"
+    || registro.operacao_chave !== `PRODUCAO:${registro.registro_id}`
     || Number(registro.estoque_produto_id) !== esperado.produtoId
     || Number(registro.estoque_quantidade) !== esperado.quantidadeFardos
     || Number(registro.estoque_efeito) !== 1) return { tipo: "INCOMPLETO", mensagem: "O lançamento ou sua entrada de estoque está incompleto." };
@@ -2530,6 +2611,9 @@ async function registrarLancamentoLoteV11(request, env, user, loteId) {
   if (!acessoProducaoPermitido(user)) return acessoNegado();
   if (!Number.isInteger(loteId) || loteId <= 0) return json({ error: "Lote inválido." }, 400);
   const dados = await request.json(), produtoId = Number(dados.produto_id || 0), quantidadeFardos = Number(dados.quantidade_fardos);
+  const contrato = normalizarAmbienteProducao(dados.ambiente, user);
+  if (contrato.resposta) return contrato.resposta;
+  const ambiente = contrato.ambiente;
   const dataMontagem = normalizeText(dados.data_montagem || dados.data_producao || obterDataLocalCuiaba());
   const observacaoLivre = normalizeText(dados.observacao), chaveCliente = normalizeText(dados.chave_idempotencia);
   if (!Number.isInteger(produtoId) || produtoId <= 0) return json({ error: "Produto inválido." }, 400);
@@ -2537,19 +2621,21 @@ async function registrarLancamentoLoteV11(request, env, user, loteId) {
   if (!dataOperacionalValida(dataMontagem)) return json({ error: "Data da montagem dos fardos inválida." }, 400);
   if (dados.confirmacao_fisica !== true) return json({ error: "Confirme fisicamente os fardos montados." }, 400);
   if (!chaveCliente || chaveCliente.length > 120) return json({ error: "Chave de idempotência inválida." }, 400);
-  const chave = chaveLancamentoLoteV11(loteId, chaveCliente), observacao = `MONTAGEM_FISICA_CONFIRMADA${observacaoLivre ? ` | ${observacaoLivre}` : ""}`;
-  const esperado = { loteId, produtoId, usuarioId: Number(user.vendedorId), dataMontagem, quantidadeFardos, observacao };
-  const registroExistente = await buscarRegistroProducaoPorChave(env, chave);
-  const local = await obterEstoqueCentral(env);
-  if (!local) return json({ error: "Estoque Central ainda não foi inicializado." }, 409);
+  const loteSemFiltro = await buscarLoteProducaoPorId(env, loteId);
+  if (!loteSemFiltro) return json({ error: "Lote não encontrado." }, 404);
+  if (loteSemFiltro.ambiente !== ambiente) return json({ error: "O lote pertence a outro ambiente de Produção." }, 409);
+  const lote = loteSemFiltro;
+  const chave = chaveLancamentoLoteV11(ambiente, loteId, chaveCliente), observacao = `MONTAGEM_FISICA_CONFIRMADA${observacaoLivre ? ` | ${observacaoLivre}` : ""}`;
+  const esperado = { ambiente, loteId, produtoId, usuarioId: Number(user.vendedorId), dataMontagem, quantidadeFardos, observacao };
+  const registroExistente = await buscarRegistroProducaoPorChave(env, chave, ambiente);
+  const local = ambiente === "OFICIAL" ? await obterEstoqueCentral(env) : null;
+  if (ambiente === "OFICIAL" && !local) return json({ error: "Estoque Central ainda não foi inicializado." }, 409);
   if (registroExistente) {
     const auditoria = await auditarEntradaLancamentoV11(env, registroExistente.id);
-    const validacao = validarLancamentoV11Existente(auditoria, esperado, local.id);
+    const validacao = validarLancamentoV11Existente(auditoria, esperado, local?.id);
     if (validacao) return json({ error: validacao.tipo === "INCOMPLETO" ? "O lançamento existente está incompleto. Solicite auditoria." : validacao.mensagem, detalhe: validacao.mensagem }, 409);
     return json({ success: true, idempotente: true, lancamento: auditoria });
   }
-  const lote = await buscarLoteProducaoPorId(env, loteId);
-  if (!lote) return json({ error: "Lote não encontrado." }, 404);
   if (lote.fluxo !== "V1_1_GRADUAL" || lote.status !== "ABERTO") return json({ error: "Somente lotes V1.1 abertos aceitam lançamentos." }, 409);
   const vinculo = await env.DB.prepare("SELECT id FROM producao_lote_produtos WHERE lote_id = ? AND produto_id = ?").bind(loteId, produtoId).first();
   if (!vinculo) return json({ error: "O produto não está vinculado ao lote." }, 409);
@@ -2560,19 +2646,20 @@ async function registrarLancamentoLoteV11(request, env, user, loteId) {
         quantidade_fardos, pacotes_por_fardo_snapshot,
         quantidade_pacotes, valor_por_pacote_snapshot,
         valor_producao, observacao, chave_idempotencia,
-        created_at, confirmacao_fisica
+        created_at, confirmacao_fisica, ambiente
       )
       SELECT lote.id, vinculo.produto_id, ?, ?, ?,
         vinculo.pacotes_por_fardo_snapshot,
         ? * vinculo.pacotes_por_fardo_snapshot,
         vinculo.valor_por_pacote_snapshot,
         ROUND(? * vinculo.pacotes_por_fardo_snapshot * vinculo.valor_por_pacote_snapshot, 2),
-        ?, ?, CURRENT_TIMESTAMP, 1
+        ?, ?, CURRENT_TIMESTAMP, 1, ?
       FROM producao_lotes lote
       INNER JOIN producao_lote_produtos vinculo ON vinculo.lote_id = lote.id AND vinculo.produto_id = ?
-      WHERE lote.id = ? AND lote.fluxo = 'V1_1_GRADUAL' AND lote.status = 'ABERTO'
-    `).bind(user.vendedorId, dataMontagem, quantidadeFardos, quantidadeFardos, quantidadeFardos, observacao, chave, produtoId, loteId),
-    env.DB.prepare(`
+      WHERE lote.id = ? AND lote.ambiente = ? AND lote.fluxo = 'V1_1_GRADUAL' AND lote.status = 'ABERTO'
+    `).bind(user.vendedorId, dataMontagem, quantidadeFardos, quantidadeFardos, quantidadeFardos, observacao, chave, ambiente, produtoId, loteId, ambiente),
+  ];
+  if (ambiente === "OFICIAL") statements.push(env.DB.prepare(`
       INSERT INTO estoque_operacoes (
         tipo, status, data_operacao, origem_tipo, origem_id,
         chave_idempotencia, operacao_estornada_id, usuario_id, observacao, created_at
@@ -2582,8 +2669,7 @@ async function registrarLancamentoLoteV11(request, env, user, loteId) {
         NULL, registro.usuario_id,
         'Entrada automática da Produção #' || CAST(registro.id AS TEXT), CURRENT_TIMESTAMP
       FROM producao_registros registro WHERE registro.chave_idempotencia = ?
-    `).bind(chave),
-    env.DB.prepare(`
+    `).bind(chave), env.DB.prepare(`
       INSERT INTO estoque_movimentacoes (
         operacao_id, local_id, produto_id, carga_id, carga_item_id,
         visita_id, visita_item_id, quantidade, efeito, created_at
@@ -2594,64 +2680,81 @@ async function registrarLancamentoLoteV11(request, env, user, loteId) {
         COALESCE((SELECT quantidade_fardos FROM producao_registros WHERE chave_idempotencia = ?), 0),
         1, CURRENT_TIMESTAMP
       )
-    `).bind(chave, local.id, chave, chave),
-  ];
+    `).bind(chave, local.id, chave, chave));
   try {
     await env.DB.batch(statements);
   } catch (err) {
-    const concorrente = await buscarRegistroProducaoPorChave(env, chave);
+    const concorrente = await buscarRegistroProducaoPorChave(env, chave, ambiente);
     if (concorrente) {
       const auditoria = await auditarEntradaLancamentoV11(env, concorrente.id);
-      const validacao = validarLancamentoV11Existente(auditoria, esperado, local.id);
-      if (validacao) return json({ error: "O lançamento concorrente ficou incompleto. Solicite auditoria.", detalhe: validacao.mensagem }, 409);
+      const validacao = validarLancamentoV11Existente(auditoria, esperado, local?.id);
+      if (validacao) return json({ error: validacao.mensagem, detalhe: validacao.mensagem }, 409);
       return json({ success: true, idempotente: true, lancamento: auditoria });
     }
-    const loteAtual = await buscarLoteProducaoPorId(env, loteId);
+    const loteAtual = await buscarLoteProducaoPorId(env, loteId, ambiente);
     if (loteAtual?.status === "ENCERRADO") return json({ error: "O lote foi encerrado antes da confirmação do lançamento." }, 409);
     const mensagem = String(err?.message || "");
     if (mensagem.includes("CHECK constraint failed") || mensagem.includes("FOREIGN KEY constraint failed")) return json({ error: "O lançamento não foi gravado integralmente. Nenhuma entrada de estoque foi mantida." }, 409);
     throw err;
   }
-  const registro = await buscarRegistroProducaoPorChave(env, chave);
+  const registro = await buscarRegistroProducaoPorChave(env, chave, ambiente);
   const auditoria = registro ? await auditarEntradaLancamentoV11(env, registro.id) : null;
-  const validacao = validarLancamentoV11Existente(auditoria, esperado, local.id);
-  if (validacao) return json({ error: "O lançamento ficou estruturalmente incompleto. Solicite auditoria.", detalhe: validacao.mensagem }, 409);
+  const validacao = validarLancamentoV11Existente(auditoria, esperado, local?.id);
+  if (validacao) return json({ error: validacao.mensagem, detalhe: validacao.mensagem }, 409);
   return json({ success: true, idempotente: false, lancamento: auditoria }, 201);
+}
+
+async function auditarEncerramentoLoteProducaoV11(env, loteId, ambiente) {
+  const auditoria = await env.DB.prepare(`
+    SELECT COUNT(*) AS total_lancamentos,
+      SUM(CASE WHEN
+        (? = 'OFICIAL' AND (
+          (SELECT COUNT(*) FROM estoque_operacoes operacao WHERE operacao.tipo = 'ENTRADA_PRODUCAO' AND operacao.status = 'CONFIRMADA' AND operacao.origem_tipo = 'PRODUCAO' AND operacao.origem_id = registro.id AND operacao.chave_idempotencia = 'PRODUCAO:' || CAST(registro.id AS TEXT)) <> 1
+          OR (SELECT COUNT(*) FROM estoque_movimentacoes movimento INNER JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id WHERE operacao.origem_tipo = 'PRODUCAO' AND operacao.origem_id = registro.id) <> 1
+          OR NOT EXISTS (SELECT 1 FROM estoque_movimentacoes movimento INNER JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id INNER JOIN estoque_locais local ON local.id = movimento.local_id WHERE operacao.origem_tipo = 'PRODUCAO' AND operacao.origem_id = registro.id AND local.tipo = 'CENTRAL' AND local.ativo = 1 AND movimento.produto_id = registro.produto_id AND movimento.quantidade = registro.quantidade_fardos AND movimento.efeito = 1)
+        )) OR (? = 'TESTE' AND (
+          (SELECT COUNT(*) FROM estoque_operacoes operacao WHERE operacao.origem_tipo = 'PRODUCAO' AND operacao.origem_id = registro.id) <> 0
+          OR (SELECT COUNT(*) FROM estoque_movimentacoes movimento INNER JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id WHERE operacao.origem_tipo = 'PRODUCAO' AND operacao.origem_id = registro.id) <> 0
+        ))
+      THEN 1 ELSE 0 END) AS lancamentos_incompletos
+    FROM producao_registros registro WHERE registro.lote_id = ? AND registro.ambiente = ?
+  `).bind(ambiente, ambiente, loteId, ambiente).first();
+  return {
+    total: Number(auditoria?.total_lancamentos || 0),
+    incompletos: Number(auditoria?.lancamentos_incompletos || 0),
+  };
 }
 
 async function encerrarLoteProducaoV11(request, env, user, loteId) {
   if (!acessoProducaoPermitido(user)) return acessoNegado();
   if (!Number.isInteger(loteId) || loteId <= 0) return json({ error: "Lote inválido." }, 400);
   const dados = await request.json(), chaveCliente = normalizeText(dados.chave_idempotencia), motivo = normalizeText(dados.motivo_encerramento);
+  const contrato = normalizarAmbienteProducao(dados.ambiente, user);
+  if (contrato.resposta) return contrato.resposta;
+  const ambiente = contrato.ambiente;
   if (dados.confirmacao_encerramento !== true) return json({ error: "Confirme explicitamente o encerramento do lote." }, 400);
   if (!chaveCliente || chaveCliente.length > 120) return json({ error: "Chave de encerramento inválida." }, 400);
-  const chave = `ENCERRAMENTO_LOTE:${loteId}:${chaveCliente}`;
+  const chave = `ENCERRAMENTO_LOTE:${ambiente}:${loteId}:${chaveCliente}`;
   let lote = await buscarLoteProducaoPorId(env, loteId);
   if (!lote) return json({ error: "Lote não encontrado." }, 404);
+  if (lote.ambiente !== ambiente) return json({ error: "O lote pertence a outro ambiente de Produção." }, 409);
   if (lote.fluxo !== "V1_1_GRADUAL") return json({ error: "Lotes legados não podem ser encerrados por esta rota." }, 409);
-  if (lote.status === "ENCERRADO") {
-    if (lote.chave_encerramento !== chave || normalizeText(lote.motivo_encerramento) !== motivo) return json({ error: "O lote já foi encerrado com dados diferentes." }, 409);
-    return json({ success: true, idempotente: true, lote });
+  const loteJaEncerrado = lote.status === "ENCERRADO";
+  if (loteJaEncerrado
+    && (lote.chave_encerramento !== chave || normalizeText(lote.motivo_encerramento) !== motivo)) {
+    return json({ error: "O lote já foi encerrado com dados diferentes." }, 409);
   }
-  const auditoria = await env.DB.prepare(`
-    SELECT COUNT(*) AS total_lancamentos,
-      SUM(CASE WHEN
-        (SELECT COUNT(*) FROM estoque_operacoes operacao WHERE operacao.tipo = 'ENTRADA_PRODUCAO' AND operacao.origem_tipo = 'PRODUCAO' AND operacao.origem_id = registro.id AND operacao.chave_idempotencia = 'PRODUCAO:' || CAST(registro.id AS TEXT)) <> 1
-        OR (SELECT COUNT(*) FROM estoque_movimentacoes movimento INNER JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id WHERE operacao.origem_tipo = 'PRODUCAO' AND operacao.origem_id = registro.id) <> 1
-        OR NOT EXISTS (SELECT 1 FROM estoque_movimentacoes movimento INNER JOIN estoque_operacoes operacao ON operacao.id = movimento.operacao_id INNER JOIN estoque_locais local ON local.id = movimento.local_id WHERE operacao.origem_tipo = 'PRODUCAO' AND operacao.origem_id = registro.id AND local.tipo = 'CENTRAL' AND local.ativo = 1 AND movimento.produto_id = registro.produto_id AND movimento.quantidade = registro.quantidade_fardos AND movimento.efeito = 1)
-      THEN 1 ELSE 0 END) AS lancamentos_incompletos
-    FROM producao_registros registro WHERE registro.lote_id = ?
-  `).bind(loteId).first();
-  const total = Number(auditoria?.total_lancamentos || 0), incompletos = Number(auditoria?.lancamentos_incompletos || 0);
-  if (incompletos) return json({ error: "O lote possui lançamentos sem entrada de estoque íntegra. Solicite auditoria." }, 409);
+  const { total, incompletos } = await auditarEncerramentoLoteProducaoV11(env, loteId, ambiente);
+  if (incompletos) return json({ error: ambiente === "TESTE" ? "O lote de TESTE possui operação ou movimento de estoque e está inconsistente." : "O lote possui lançamentos sem entrada de estoque íntegra. Solicite auditoria." }, 409);
+  if (loteJaEncerrado) return json({ success: true, idempotente: true, lote });
   if (!total && (dados.confirmacao_sem_lancamentos !== true || !motivo)) return json({ error: "Para encerrar um lote sem lançamentos, confirme a exceção e informe o motivo." }, 400);
   const resultado = await env.DB.prepare(`
     UPDATE producao_lotes
     SET status = 'ENCERRADO', encerrado_em = CURRENT_TIMESTAMP,
       encerrado_por = ?, chave_encerramento = ?, motivo_encerramento = ?
-    WHERE id = ? AND fluxo = 'V1_1_GRADUAL' AND status = 'ABERTO'
-  `).bind(user.vendedorId, chave, motivo || null, loteId).run();
-  lote = await buscarLoteProducaoPorId(env, loteId);
+    WHERE id = ? AND ambiente = ? AND fluxo = 'V1_1_GRADUAL' AND status = 'ABERTO'
+  `).bind(user.vendedorId, chave, motivo || null, loteId, ambiente).run();
+  lote = await buscarLoteProducaoPorId(env, loteId, ambiente);
   if (lote?.status === "ENCERRADO" && lote.chave_encerramento === chave && normalizeText(lote.motivo_encerramento) === motivo) return json({ success: true, idempotente: Number(resultado?.meta?.changes || 0) === 0, lote });
   if (lote?.status === "ENCERRADO") return json({ error: "O lote foi encerrado concorrentemente com dados diferentes." }, 409);
   return json({ error: "O encerramento não foi confirmado. Solicite auditoria." }, 409);
@@ -4197,11 +4300,11 @@ if (url.pathname === "/api/sync" && request.method === "POST") {
     if (url.pathname.startsWith("/api/produtos/") && request.method === "PUT") {
       return await gerirProduto(request, env, user, Number(url.pathname.split("/").pop()));
     }
-    if (url.pathname === "/api/producao/parametros" && request.method === "GET") return listarParametrosProducao(env, user);
+    if (url.pathname === "/api/producao/parametros" && request.method === "GET") return listarParametrosProducao(request, env, user);
     if (/^\/api\/producao\/parametros\/\d+$/.test(url.pathname) && request.method === "PUT") {
       return salvarParametroProducao(request, env, user, Number(url.pathname.split("/").pop()));
     }
-    if (url.pathname === "/api/producao/receitas-base" && request.method === "GET") return listarReceitasBaseProducao(env, user);
+    if (url.pathname === "/api/producao/receitas-base" && request.method === "GET") return listarReceitasBaseProducao(request, env, user);
     if (url.pathname === "/api/producao/lotes/abertura" && request.method === "POST") return await abrirLoteProducaoV11(request, env, user);
     if (/^\/api\/producao\/lotes\/\d+\/produtos$/.test(url.pathname) && request.method === "POST") {
       return await incluirProdutoLoteV11(request, env, user, Number(url.pathname.split("/")[4]));
@@ -4215,7 +4318,7 @@ if (url.pathname === "/api/sync" && request.method === "POST") {
     if (url.pathname === "/api/producao/lotes" && request.method === "POST") return registrarLoteProducao(request, env, user);
     if (url.pathname === "/api/producao/lotes" && request.method === "GET") return listarLotesProducao(request, env, user);
     if (/^\/api\/producao\/lotes\/\d+$/.test(url.pathname) && request.method === "GET") {
-      return obterLoteProducao(env, user, Number(url.pathname.split("/").pop()));
+      return obterLoteProducao(request, env, user, Number(url.pathname.split("/").pop()));
     }
     if (url.pathname === "/api/producao/registros" && request.method === "GET") return listarRegistrosProducao(request, env, user);
     if (url.pathname === "/api/producao/registros" && request.method === "POST") return registrarProducao(request, env, user);
