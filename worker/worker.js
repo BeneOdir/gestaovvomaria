@@ -2390,6 +2390,19 @@ async function carregarVinculosAberturaV11(env, loteId, ambiente, chaveCliente) 
   return resultado.results || [];
 }
 
+async function carregarEstadoAberturaV11(env, chaveLote, ambiente, chaveCliente) {
+  const lote = await env.DB.prepare(`
+    SELECT id, receita_base_id, quantidade_receitas_base, data_producao,
+      usuario_id, observacao, chave_idempotencia, created_at,
+      fluxo, status, ambiente
+    FROM producao_lotes
+    WHERE chave_idempotencia = ? AND ambiente = ?
+  `).bind(chaveLote, ambiente).first();
+  if (!lote) return null;
+  const vinculos = await carregarVinculosAberturaV11(env, lote.id, ambiente, chaveCliente);
+  return { lote, vinculos };
+}
+
 function validarAberturaV11Existente(lote, vinculos, esperado) {
   if (lote.fluxo !== "V1_1_GRADUAL"
     || lote.ambiente !== esperado.ambiente
@@ -2436,18 +2449,17 @@ async function abrirLoteProducaoV11(request, env, user) {
 
   const chaveLote = chaveAberturaLoteV11(ambiente, chaveCliente);
   const esperado = { ambiente, receitaBaseId, quantidadeReceitasBase, dataProducao, observacao, usuarioId: Number(user.vendedorId), produtos };
-  const existente = await carregarLoteProducaoCompleto(env, chaveLote, true, ambiente);
+  const existente = await carregarEstadoAberturaV11(env, chaveLote, ambiente, chaveCliente);
   if (existente) {
-    const vinculos = await carregarVinculosAberturaV11(env, existente.id, ambiente, chaveCliente);
-    const validacao = validarAberturaV11Existente(existente, vinculos, esperado);
-    if (validacao) return respostaConflitoLote(validacao, existente);
-    return json({ success: true, idempotente: true, lote: existente });
+    const validacao = validarAberturaV11Existente(existente.lote, existente.vinculos, esperado);
+    if (validacao) return respostaConflitoLote(validacao, existente.lote);
+    return json({ success: true, idempotente: true, lote_id: Number(existente.lote.id), lote: existente.lote });
   }
 
-  const receita = await env.DB.prepare("SELECT id FROM producao_receitas_base WHERE id = ? AND ativo = 1").bind(receitaBaseId).first();
+  const receita = await env.DB.prepare("SELECT id, nome, versao FROM producao_receitas_base WHERE id = ? AND ativo = 1").bind(receitaBaseId).first();
   if (!receita) return json({ error: "Receita Base ativa não encontrada." }, 409);
   const parametros = await Promise.all(produtos.map(produtoId => env.DB.prepare(`
-    SELECT produto.id, parametro.pacotes_por_fardo, parametro.valor_por_pacote
+    SELECT produto.id, produto.nome, parametro.pacotes_por_fardo, parametro.valor_por_pacote
     FROM produtos produto
     INNER JOIN producao_parametros_produto parametro ON parametro.produto_id = produto.id AND parametro.ativo = 1
     WHERE produto.id = ? AND produto.ativo = 'ativo'
@@ -2472,6 +2484,8 @@ async function abrirLoteProducaoV11(request, env, user) {
     INNER JOIN vendedores usuario ON usuario.id = ?
     WHERE receita.id = ? AND receita.ativo = 1
       AND usuario.status = 'ativo' AND usuario.role IN ('admin', 'operacao')
+    RETURNING id, receita_base_id, quantidade_receitas_base, data_producao,
+      usuario_id, observacao, chave_idempotencia, created_at, fluxo, status, ambiente
   `).bind(quantidadeReceitasBase, dataProducao, observacao, chaveLote, ambiente, user.vendedorId, receitaBaseId)];
   for (const produtoId of produtos) statements.push(env.DB.prepare(`
     INSERT INTO producao_lote_produtos (
@@ -2485,29 +2499,123 @@ async function abrirLoteProducaoV11(request, env, user) {
       COALESCE((SELECT parametro.valor_por_pacote FROM produtos produto INNER JOIN producao_parametros_produto parametro ON parametro.produto_id = produto.id AND parametro.ativo = 1 WHERE produto.id = ? AND produto.ativo = 'ativo'), -1),
       ?, 'Vinculado na abertura do lote', ?, CURRENT_TIMESTAMP
     )
+    RETURNING id, lote_id, produto_id, pacotes_por_fardo_snapshot,
+      valor_por_pacote_snapshot, incluido_por, observacao,
+      chave_idempotencia, created_at
   `).bind(chaveLote, ambiente, produtoId, produtoId, produtoId, user.vendedorId, `LOTE_PRODUTO_ABERTURA:${ambiente}:${chaveCliente}:PRODUTO:${produtoId}`));
+  let resultadosBatch;
   try {
-    await env.DB.batch(statements);
+    resultadosBatch = await env.DB.batch(statements);
   } catch (err) {
-    const concorrente = await carregarLoteProducaoCompleto(env, chaveLote, true, ambiente);
-    if (concorrente) {
-      const vinculos = await carregarVinculosAberturaV11(env, concorrente.id, ambiente, chaveCliente);
-      const validacao = validarAberturaV11Existente(concorrente, vinculos, esperado);
-      if (validacao) return respostaConflitoLote(validacao, concorrente);
-      return json({ success: true, idempotente: true, lote: concorrente });
+    try {
+      const concorrente = await carregarEstadoAberturaV11(env, chaveLote, ambiente, chaveCliente);
+      if (concorrente) {
+        const validacao = validarAberturaV11Existente(concorrente.lote, concorrente.vinculos, esperado);
+        if (validacao) return respostaConflitoLote(validacao, concorrente.lote);
+        return json({ success: true, idempotente: true, lote_id: Number(concorrente.lote.id), lote: concorrente.lote });
+      }
+      console.error("Resultado da abertura de lote não pôde ser confirmado após rejeição do batch.", {
+        rota: "abertura_lote_producao",
+        ambiente,
+        total_statements: statements.length,
+        fase: "recuperacao_sem_lote",
+      });
+      return json({
+        error: "Não foi possível confirmar o resultado da abertura. Repita a operação usando a mesma chave para consultar o resultado sem duplicar.",
+        codigo: "ABERTURA_RESULTADO_INDETERMINADO",
+      }, 503);
+    } catch (recuperacaoErr) {
+      console.error("Falha ao confirmar abertura de lote após rejeição do batch.", {
+        rota: "abertura_lote_producao",
+        ambiente,
+        total_statements: statements.length,
+        fase: "recuperacao_falhou",
+        tipo_erro: normalizeText(recuperacaoErr?.name || "Error"),
+      });
+      return json({
+        error: "Não foi possível confirmar o resultado da abertura. Repita a operação usando a mesma chave para consultar o resultado sem duplicar.",
+        codigo: "ABERTURA_CONFIRMACAO_INDETERMINADA",
+      }, 503);
     }
-    const mensagem = String(err?.message || "");
-    if (mensagem.includes("CHECK constraint failed") || mensagem.includes("FOREIGN KEY constraint failed") || mensagem.includes("NOT NULL constraint failed")) {
-      return json({ error: "O lote não foi aberto porque os dados não atendem à estrutura exigida. Nenhum lote ou vínculo parcial foi mantido.", detalhe: mensagem }, 409);
-    }
-    throw err;
   }
-  const lote = await carregarLoteProducaoCompleto(env, chaveLote, true, ambiente);
-  const vinculos = lote ? await carregarVinculosAberturaV11(env, lote.id, ambiente, chaveCliente) : [];
-  const validacao = lote ? validarAberturaV11Existente(lote, vinculos, esperado) : { tipo: "INCOMPLETO", mensagem: "O lote não foi criado." };
+  if (!Array.isArray(resultadosBatch) || resultadosBatch.some(resultado => resultado?.success !== true)) {
+    return json({
+      error: "O batch da abertura não confirmou todas as gravações. Nenhum sucesso será informado sem confirmação integral.",
+      codigo: "ABERTURA_BATCH_NAO_CONFIRMADO",
+    }, 409);
+  }
+  const resultadoLote = Array.isArray(resultadosBatch) ? resultadosBatch[0] : null;
+  const linhaLote = Array.isArray(resultadoLote?.results) ? resultadoLote.results[0] : null;
+  let loteId = Number(linhaLote?.id || resultadoLote?.meta?.last_row_id || 0);
+  if (!Number.isInteger(loteId) || loteId <= 0) {
+    try {
+      const confirmacao = await env.DB.prepare(`
+        SELECT id FROM producao_lotes
+        WHERE chave_idempotencia = ? AND ambiente = ?
+      `).bind(chaveLote, ambiente).first();
+      loteId = Number(confirmacao?.id || 0);
+    } catch (err) {
+      return json({
+        error: "A abertura foi processada, mas não foi possível confirmar o lote criado. Repita com a mesma chave para consultar o resultado sem duplicar.",
+        codigo: "ABERTURA_CONFIRMACAO_INDETERMINADA",
+      }, 503);
+    }
+  }
+  if (!Number.isInteger(loteId) || loteId <= 0) {
+    return json({
+      error: "A abertura não retornou um identificador de lote. Repita com a mesma chave antes de tentar uma nova abertura.",
+      codigo: "ABERTURA_SEM_LOTE_ID",
+    }, 503);
+  }
+  const resultadosVinculos = resultadosBatch.slice(1);
+  const vinculosConfirmados = resultadosBatch.length === statements.length
+    && resultadosVinculos.length === produtos.length
+    && resultadosVinculos.every((resultado, indice) => {
+      if (resultado?.success !== true || !Array.isArray(resultado.results) || resultado.results.length !== 1) return false;
+      const vinculo = resultado.results[0];
+      const parametro = parametros[indice];
+      return Number.isInteger(Number(vinculo?.id))
+        && Number(vinculo.id) > 0
+        && Number(vinculo?.lote_id) === loteId
+        && Number(vinculo?.produto_id) === produtos[indice]
+        && Number(vinculo?.incluido_por) === Number(user.vendedorId)
+        && normalizeText(vinculo?.chave_idempotencia) === `LOTE_PRODUTO_ABERTURA:${ambiente}:${chaveCliente}:PRODUTO:${produtos[indice]}`
+        && compararNumeroProducao(vinculo?.pacotes_por_fardo_snapshot, parametro?.pacotes_por_fardo)
+        && compararNumeroProducao(vinculo?.valor_por_pacote_snapshot, parametro?.valor_por_pacote);
+    });
+  if (!vinculosConfirmados) {
+    return json({
+      error: "Não foi possível confirmar todos os vínculos da abertura. Repita a operação usando a mesma chave para consultar o resultado sem duplicar.",
+      codigo: "ABERTURA_VINCULOS_NAO_CONFIRMADOS",
+    }, 503);
+  }
+  const vinculosRetornados = resultadosVinculos.map(resultado => resultado.results[0]);
+  if (new Set(vinculosRetornados.map(vinculo => Number(vinculo.produto_id))).size !== produtos.length) {
+    return json({
+      error: "Não foi possível confirmar todos os vínculos da abertura. Repita a operação usando a mesma chave para consultar o resultado sem duplicar.",
+      codigo: "ABERTURA_VINCULOS_NAO_CONFIRMADOS",
+    }, 503);
+  }
+  const lote = {
+    ...(linhaLote || {}),
+    id: loteId,
+    receita_base_id: receitaBaseId,
+    receita_base_nome: receita.nome,
+    receita_base_versao: receita.versao,
+    quantidade_receitas_base: quantidadeReceitasBase,
+    data_producao: dataProducao,
+    usuario_id: Number(user.vendedorId),
+    observacao,
+    chave_idempotencia: chaveLote,
+    fluxo: "V1_1_GRADUAL",
+    status: "ABERTO",
+    ambiente,
+    itens: [],
+    produtos_vinculados: vinculosRetornados,
+  };
+  const validacao = validarAberturaV11Existente(lote, vinculosRetornados, esperado);
   if (validacao) return json({ error: "A abertura do lote ficou incompleta. Solicite auditoria.", detalhe: validacao.mensagem }, 409);
-  if (lote.itens.length) return json({ error: "A abertura criou lançamentos indevidos. Solicite auditoria." }, 409);
-  return json({ success: true, idempotente: false, lote }, 201);
+  return json({ success: true, idempotente: false, lote_id: loteId, lote }, 201);
 }
 
 async function incluirProdutoLoteV11(request, env, user, loteId) {
