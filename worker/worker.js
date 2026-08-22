@@ -4406,6 +4406,7 @@ async function minhaCarga(env, user) {
   if (!carga) return json({ carga: null, produtos: [], bonificacoes_fardo: [] });
   const [produtos, bonificacoes] = await Promise.all([
     env.DB.prepare(`SELECT p.id produto_id,p.nome produto_nome,p.pacotes_por_fardo,
+      EXISTS(SELECT 1 FROM estoque_carga_itens ci_atual WHERE ci_atual.carga_id=c.id AND ci_atual.produto_id=p.id) AS participa_carga_atual,
       COALESCE((SELECT SUM(m.quantidade*m.efeito) FROM estoque_movimentacoes m WHERE m.local_id=c.local_carga_id AND m.produto_id=p.id),0) AS fardos_fechados,
       COALESCE((SELECT SUM(pm.quantidade_pacotes*pm.efeito) FROM estoque_pacote_movimentacoes pm JOIN estoque_pacote_operacoes po ON po.id=pm.operacao_id WHERE po.status IN('CONFIRMADA','ESTORNADA') AND pm.local_carga_id=c.local_carga_id AND pm.produto_id=p.id AND pm.bucket='FRACIONADO_NOVO'),0) AS fracionado_novo,
       COALESCE((SELECT SUM(pm.quantidade_pacotes*pm.efeito) FROM estoque_pacote_movimentacoes pm JOIN estoque_pacote_operacoes po ON po.id=pm.operacao_id WHERE po.status IN('CONFIRMADA','ESTORNADA') AND pm.local_carga_id=c.local_carga_id AND pm.produto_id=p.id AND pm.bucket='DESCARTE_PENDENTE'),0) AS descarte_pendente
@@ -4420,7 +4421,11 @@ async function minhaCarga(env, user) {
       FROM bonificacao_fardo_solicitacoes WHERE vendedor_id=? AND carga_id=? AND status IN('PENDENTE','APROVADA') ORDER BY id DESC`)
       .bind(user.vendedorId, carga.id).all()
   ]);
-  return json({ carga, produtos: produtos.results || [], bonificacoes_fardo: bonificacoes.results || [] });
+  const produtosPublicos = (produtos.results || []).map(produto => ({
+    ...produto,
+    participa_carga_atual: Number(produto.participa_carga_atual) === 1,
+  }));
+  return json({ carga, produtos: produtosPublicos, bonificacoes_fardo: bonificacoes.results || [] });
 }
 
 async function saldoPacotes(request, env, user, proprio = false) {
