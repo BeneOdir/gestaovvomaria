@@ -24,13 +24,15 @@
     .aviso{background:#fffbeb;border-left:5px solid #f59e0b;border-radius:16px;padding:14px;color:#78350f;line-height:1.5;margin-top:14px}.aviso strong{color:#9a3412}
     .produto-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:14px}.produto{min-width:0;border:1px solid #fed7aa;border-radius:20px;padding:17px;background:#fff}.produto h3{font-size:18px;color:#78350f;margin-bottom:5px}.conversao{font-size:12px;color:#78716c;margin-bottom:13px}
     .produto h3,.conversao,.saldo span,.saldo strong{overflow-wrap:anywhere;word-break:break-word}
+    .abrir-fardo{margin-top:14px;padding-top:14px;border-top:1px solid #f3e3d1}.abrir-fardo .button{width:100%;background:#e9a900;color:#432818;cursor:pointer}.abrir-fardo .button:disabled{cursor:not-allowed;background:#e7e5e4;color:#78716c}.indisponivel{color:#78716c;font-size:13px;font-weight:750;text-align:center}
     .saldos{min-width:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.saldo{min-width:0;border-radius:15px;padding:12px 9px;min-height:88px}.saldo span{display:block;font-size:11px;font-weight:850;line-height:1.25}.saldo strong{display:block;font-size:23px;margin-top:7px}
     .saldo.fardos{background:#ffedd5;color:#9a3412}.saldo.pacotes{background:#d1fae5;color:#065f46}.saldo.descarte{background:#fee2e2;color:#991b1b}
     .solicitacoes{min-width:0;display:grid;gap:12px}.solicitacao{min-width:0;border:1px solid #f3e3d1;border-radius:18px;padding:15px;display:grid;grid-template-columns:1.4fr repeat(3,minmax(0,1fr));gap:12px;align-items:center}.solicitacao>div{min-width:0}.solicitacao,.solicitacao *{overflow-wrap:anywhere;word-break:break-word}
     .rotulo{display:block;font-size:11px;text-transform:uppercase;font-weight:850;color:#9a3412;margin-bottom:4px}.tag{display:inline-block;border-radius:999px;padding:6px 10px;font-size:11px;font-weight:900}.tag.pendente{background:#fef3c7;color:#92400e}.tag.aprovada{background:#d1fae5;color:#065f46}
     .empty{text-align:center;padding:28px 14px;color:#78716c;background:#fafaf9;border-radius:18px}.hidden{display:none!important}
+    .modal{position:fixed;inset:0;z-index:1000;background:rgba(67,40,24,.58);padding:16px;display:grid;place-items:center;overflow:auto}.modal-card{min-width:0;width:min(620px,100%);max-height:calc(100vh - 32px);overflow:auto;background:#fff;border-radius:24px;padding:22px;box-shadow:0 20px 55px rgba(0,0,0,.25)}.modal-card h2,.modal-card p,.modal-card label,.modal-card strong,.modal-card span{overflow-wrap:anywhere;word-break:break-word}.resumo-abertura{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:15px 0}.resumo-abertura .info{padding:12px}.campo{display:grid;gap:6px;margin-top:13px}.campo label{font-weight:800;color:#78350f}.campo input,.campo textarea{width:100%;border:1px solid #d6d3d1;border-radius:12px;padding:11px;font:inherit}.confirmacao-fisica{display:flex;align-items:flex-start;gap:10px;margin-top:16px;padding:13px;background:#fff7ed;border-radius:14px;font-weight:750}.confirmacao-fisica input{width:20px;height:20px;flex:0 0 auto}.modal-actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:17px}.modal-actions .principal{background:#e9a900;color:#432818}.mensagem-mutacao{margin-top:13px;padding:12px;border-radius:13px;background:#fef3c7;color:#92400e;line-height:1.4}.mensagem-mutacao.err{background:#fee2e2;color:#991b1b}.mensagem-mutacao.ok{background:#d1fae5;color:#065f46}
     @media(max-width:720px){body{padding:10px}.top,.panel{padding:16px;border-radius:20px}.brand{align-items:flex-start}.logo{width:62px;height:62px}.carga-grid{grid-template-columns:1fr}.solicitacao{grid-template-columns:1fr 1fr}.produto-grid{grid-template-columns:1fr}}
-    @media(max-width:430px){.brand{flex-direction:column;align-items:center;text-align:center}.logo{width:96px;height:96px}.actions>*{width:100%}.saldos{grid-template-columns:1fr}.saldo{min-height:auto}.solicitacao{grid-template-columns:1fr}h1{font-size:23px}}
+    @media(max-width:430px){.brand{flex-direction:column;align-items:center;text-align:center}.logo{width:96px;height:96px}.actions>*{width:100%}.saldos,.resumo-abertura{grid-template-columns:1fr}.saldo{min-height:auto}.solicitacao{grid-template-columns:1fr}h1{font-size:23px}.modal{padding:8px}.modal-card{padding:16px;max-height:calc(100vh - 16px)}.modal-actions>*{width:100%}}
   </style>
 </head>
 <body>
@@ -84,11 +86,31 @@
   </div>
 </main>
 
+<div id="modalAbertura" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="tituloAbertura">
+  <section class="modal-card">
+    <h2 id="tituloAbertura">Abrir 1 fardo</h2>
+    <p class="sub" id="produtoAbertura"></p>
+    <div class="resumo-abertura">
+      <div class="info"><span>Fardos fechados atuais</span><strong id="fardosAntes">—</strong></div>
+      <div class="info"><span>Pacotes disponíveis atuais</span><strong id="pacotesAntes">—</strong></div>
+      <div class="info"><span>Conversão</span><strong id="conversaoAbertura">—</strong></div>
+      <div class="info"><span>Resultado esperado</span><strong id="resultadoAbertura">—</strong></div>
+    </div>
+    <div class="aviso"><strong>Atenção:</strong> esta operação não é venda, não gera comissão, não cria descarte e converte somente o produto selecionado.</div>
+    <div class="campo"><label for="dataAbertura">Data da operação</label><input id="dataAbertura" type="date"></div>
+    <div class="campo"><label for="observacaoAbertura">Observação (opcional)</label><textarea id="observacaoAbertura" maxlength="500" rows="3"></textarea></div>
+    <label class="confirmacao-fisica"><input id="confirmacaoFisica" type="checkbox"><span>Confirmo que abri fisicamente este fardo.</span></label>
+    <div id="mensagemAbertura" class="mensagem-mutacao hidden" role="status" aria-live="polite"></div>
+    <div class="modal-actions"><button id="cancelarAbertura" class="button" type="button">Cancelar</button><button id="confirmarAbertura" class="button principal" type="button">Confirmar abertura</button></div>
+  </section>
+</div>
+
 <script>
 const API_BASE="https://gestaovomaria-api.odir-bene12.workers.dev";
 const token=localStorage.getItem("token");
 const role=localStorage.getItem("vendedorRole")||"";
 const nome=localStorage.getItem("vendedorNome")||"Usuário";
+const vendedorIdSessao=Number(localStorage.getItem("vendedorId"));
 
 if(!token){
   location.href="login.html";
@@ -115,11 +137,113 @@ function dataBR(valor,comHora=false){
 }
 function textoMotivo(valor){return String(valor||"Não informado").replaceAll("_"," ")}
 function setStatus(mensagem,tipo=""){const el=document.getElementById("status");el.textContent=mensagem;el.className=`status ${tipo}`}
+function dataCuiaba(){
+  const partes=new Intl.DateTimeFormat("en-CA",{timeZone:"America/Cuiaba",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date());
+  const valor=tipo=>partes.find(parte=>parte.type===tipo)?.value;
+  return `${valor("year")}-${valor("month")}-${valor("day")}`;
+}
+function gerarChaveAbertura(){
+  if(globalThis.crypto?.randomUUID)return crypto.randomUUID();
+  const bytes=new Uint8Array(16);crypto.getRandomValues(bytes);
+  return [...bytes].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+}
+const CHAVE_TENTATIVAS_ABERTURA="minhaCargaPacotes.tentativasAbertura.v1";
+const VERSAO_TENTATIVAS_ABERTURA=1;
+let controleIdempotenciaIndisponivel=false;
+const mensagemControleIndisponivel="Não foi possível confirmar a tentativa anterior. Nenhum novo fardo será aberto. Atualize a sessão ou procure o administrador.";
+function normalizarObservacao(valor){return String(valor??"").trim()}
+function assinaturaTentativa({cargaId,produtoId,data,observacao}){return JSON.stringify([Number(cargaId),Number(produtoId),String(data),normalizarObservacao(observacao)])}
+function dataIsoValida(valor){if(typeof valor!=="string"||!/^\d{4}-\d{2}-\d{2}$/.test(valor))return false;const [a,m,d]=valor.split("-").map(Number),data=new Date(Date.UTC(a,m-1,d));return data.getUTCFullYear()===a&&data.getUTCMonth()===m-1&&data.getUTCDate()===d}
+function itemTentativaValido(item,assinatura){return item&&typeof item==="object"&&!Array.isArray(item)
+  &&Number.isInteger(item.vendedorId)&&item.vendedorId>0&&Number.isInteger(item.cargaId)&&item.cargaId>0
+  &&Number.isInteger(item.produtoId)&&item.produtoId>0&&dataIsoValida(item.data)
+  &&typeof item.observacao==="string"&&item.observacao.length<=500&&normalizarObservacao(item.observacao)===item.observacao
+  &&typeof item.chave==="string"&&!!item.chave.trim()&&item.chave.length<=130&&item.enviada===true
+  &&(item.estado==="PENDENTE"||item.estado==="CONFIRMADA")
+  &&assinatura===assinaturaTentativa(item)}
+function lerTentativasAbertura(){
+  let bruto;try{bruto=sessionStorage.getItem(CHAVE_TENTATIVAS_ABERTURA)}catch{controleIdempotenciaIndisponivel=true;return{ok:false}}
+  if(bruto===null)return{ok:true,documento:{versao:VERSAO_TENTATIVAS_ABERTURA,tentativas:{}}};
+  try{
+    const documento=JSON.parse(bruto);
+    if(!documento||typeof documento!=="object"||Array.isArray(documento)||documento.versao!==VERSAO_TENTATIVAS_ABERTURA
+      ||!documento.tentativas||typeof documento.tentativas!=="object"||Array.isArray(documento.tentativas)
+      ||Object.entries(documento.tentativas).some(([assinatura,item])=>!itemTentativaValido(item,assinatura))){controleIdempotenciaIndisponivel=true;return{ok:false}}
+    return{ok:true,documento};
+  }catch{controleIdempotenciaIndisponivel=true;return{ok:false}}
+}
+function salvarTentativasAbertura(documento){
+  try{if(Object.keys(documento.tentativas).length)sessionStorage.setItem(CHAVE_TENTATIVAS_ABERTURA,JSON.stringify(documento));else sessionStorage.removeItem(CHAVE_TENTATIVAS_ABERTURA);return true}
+  catch{controleIdempotenciaIndisponivel=true;return false}
+}
+function tentativaPendente(cargaId,produtoId){
+  const leitura=lerTentativasAbertura();if(!leitura.ok)return{erro:true};
+  const correspondentes=Object.values(leitura.documento.tentativas).filter(item=>item.cargaId===cargaId&&item.produtoId===produtoId);
+  if(correspondentes.some(item=>item.vendedorId!==vendedorIdSessao)){controleIdempotenciaIndisponivel=true;return{erro:true}}
+  return correspondentes.find(item=>item.vendedorId===vendedorIdSessao)||null;
+}
+function persistirTentativa(tentativa){
+  const leitura=lerTentativasAbertura();if(!leitura.ok)return false;
+  const item={vendedorId:vendedorIdSessao,cargaId:tentativa.cargaId,produtoId:tentativa.produtoId,data:tentativa.data,observacao:normalizarObservacao(tentativa.observacao),chave:tentativa.chave,enviada:true,estado:"PENDENTE"};
+  const assinatura=assinaturaTentativa(item);
+  if(!itemTentativaValido(item,assinatura))return false;
+  if(tentativa.marcadorConfirmado){
+    const assinaturaConfirmada=assinaturaTentativa(tentativa.marcadorConfirmado),confirmada=leitura.documento.tentativas[assinaturaConfirmada];
+    if(!confirmada||confirmada.estado!=="CONFIRMADA"||confirmada.vendedorId!==vendedorIdSessao
+      ||confirmada.cargaId!==item.cargaId||confirmada.produtoId!==item.produtoId
+      ||JSON.stringify(confirmada)!==JSON.stringify(tentativa.marcadorConfirmado))return false;
+    delete leitura.documento.tentativas[assinaturaConfirmada];
+  }
+  leitura.documento.tentativas[assinatura]=item;
+  if(!leitura.documento.tentativas[assinatura]||leitura.documento.tentativas[assinatura].estado!=="PENDENTE"
+    ||leitura.documento.tentativas[assinatura].chave!==tentativa.chave
+    ||JSON.stringify(leitura.documento.tentativas[assinatura])!==JSON.stringify(item)
+    ||Object.keys(leitura.documento.tentativas).length===0)return false;
+  if(!salvarTentativasAbertura(leitura.documento))return false;
+  const confirmacao=lerTentativasAbertura();return confirmacao.ok&&JSON.stringify(confirmacao.documento.tentativas[assinatura])===JSON.stringify(item);
+}
+function confirmarTentativa(tentativa){
+  const leitura=lerTentativasAbertura();if(!leitura.ok)return false;const assinatura=assinaturaTentativa(tentativa),atual=leitura.documento.tentativas[assinatura];
+  if(!atual||atual.estado!=="PENDENTE"||atual.chave!==tentativa.chave)return false;
+  const confirmada={...atual,estado:"CONFIRMADA"};leitura.documento.tentativas[assinatura]=confirmada;
+  if(!salvarTentativasAbertura(leitura.documento))return false;
+  const confirmacao=lerTentativasAbertura();return confirmacao.ok&&JSON.stringify(confirmacao.documento.tentativas[assinatura])===JSON.stringify(confirmada);
+}
+function removerTentativa(tentativa){const leitura=lerTentativasAbertura();if(!leitura.ok)return false;delete leitura.documento.tentativas[assinaturaTentativa(tentativa)];return salvarTentativasAbertura(leitura.documento)}
+function substituirChaveTentativa(tentativa,novaChave){
+  const leitura=lerTentativasAbertura();if(!leitura.ok)return false;const assinatura=assinaturaTentativa(tentativa),atual=leitura.documento.tentativas[assinatura];
+  if(!atual||typeof novaChave!=="string"||!novaChave.trim()||novaChave.length>130)return false;
+  leitura.documento.tentativas[assinatura]={...atual,chave:novaChave};
+  if(!salvarTentativasAbertura(leitura.documento))return false;
+  const confirmacao=lerTentativasAbertura();return confirmacao.ok&&confirmacao.documento.tentativas[assinatura]?.chave===novaChave;
+}
+
+function operacaoAberturaCompativel(dados,contexto){
+  const operacao=dados?.operacao,movimentos=operacao?.movimentos;
+  const inteiroPositivo=valor=>typeof valor==="number"&&Number.isInteger(valor)&&valor>0;
+  return dados?.success===true&&typeof dados.idempotente==="boolean"
+    &&inteiroPositivo(operacao?.id)
+    &&operacao.tipo==="ABERTURA_FARDO"&&operacao.status==="CONFIRMADA"
+    &&inteiroPositivo(operacao.vendedor_id)&&operacao.vendedor_id===contexto.vendedorId
+    &&inteiroPositivo(operacao.carga_id)&&operacao.carga_id===contexto.cargaId
+    &&inteiroPositivo(operacao.local_carga_id)&&operacao.local_carga_id===contexto.localId
+    &&inteiroPositivo(operacao.produto_id)&&operacao.produto_id===contexto.produtoId
+    &&inteiroPositivo(operacao.usuario_id)&&operacao.usuario_id===contexto.vendedorId
+    &&operacao.data_operacao===contexto.data&&normalizarObservacao(operacao.observacao)===contexto.observacao
+    &&inteiroPositivo(operacao.quantidade_pacotes)&&operacao.quantidade_pacotes===contexto.conversao
+    &&inteiroPositivo(operacao.pacotes_por_fardo_snapshot)&&operacao.pacotes_por_fardo_snapshot===contexto.conversao
+    &&inteiroPositivo(operacao.estoque_operacao_fardo_id)
+    &&Array.isArray(movimentos)&&movimentos.length===1
+    &&movimentos[0]?.bucket==="FRACIONADO_NOVO"
+    &&inteiroPositivo(movimentos[0]?.quantidade_pacotes)&&movimentos[0].quantidade_pacotes===contexto.conversao
+    &&movimentos[0]?.efeito===1;
+}
 
 function criarErroHttp(status,dados){
   const corpo={};
   if(typeof dados?.codigo==="string")corpo.codigo=dados.codigo.slice(0,100);
   if(status<500&&typeof dados?.error==="string")corpo.error=dados.error.slice(0,300);
+  if(typeof dados?.chave_idempotencia==="string")corpo.chave_idempotencia=dados.chave_idempotencia.slice(0,200);
   const mensagem=status===401
     ?"Sessão expirada."
     :status===403
@@ -152,6 +276,17 @@ async function apiGet(caminho,{signal}={}){
   return dados;
 }
 
+async function apiPost(caminho,payload){
+  let resposta;
+  try{resposta=await fetch(API_BASE+caminho,{method:"POST",headers:{Authorization:`Bearer ${token}`,"Content-Type":"application/json"},body:JSON.stringify(payload)})}
+  catch{throw new Error("Não foi possível conectar ao serviço. Tente novamente com a mesma chave.")}
+  const texto=await resposta.text();let dados=null;
+  if(texto){try{dados=JSON.parse(texto)}catch{if(resposta.ok)throw new Error("O serviço retornou uma resposta inválida. Tente novamente com a mesma chave.")}}
+  if(!resposta.ok)throw criarErroHttp(resposta.status,dados);
+  if(!dados||typeof dados!=="object")throw new Error("A confirmação da abertura ficou indeterminada. Tente novamente com a mesma chave.");
+  return {dados,status:resposta.status};
+}
+
 function consolidarProdutos(produtosRecebidos,saldosRecebidos){
   const produtos=new Map(),saldos=new Map();
   for(const item of Array.isArray(saldosRecebidos)?saldosRecebidos:[]){
@@ -172,9 +307,22 @@ function consolidarProdutos(produtosRecebidos,saldosRecebidos){
 function renderizarProdutos(produtos){
   const lista=document.getElementById("produtos"),vazio=document.getElementById("produtosVazio");lista.replaceChildren();vazio.classList.toggle("hidden",produtos.length>0);
   for(const produto of produtos){
-    const porFardo=Number(produto.pacotes_por_fardo),conversao=Number.isSafeInteger(porFardo)&&porFardo>0?`${numero(porFardo)} pacotes por fardo`:"Conversão por fardo não informada";
+    const porFardo=produto.pacotes_por_fardo,conversao=typeof porFardo==="number"&&Number.isInteger(porFardo)&&porFardo>0?`${numero(porFardo)} pacotes por fardo`:"Conversão por fardo não informada";
     const cartao=document.createElement("article");cartao.className="produto";
     cartao.innerHTML=`<h3>${escapar(produto.produto_nome||`Produto #${produto.produto_id}`)}</h3><div class="conversao">${escapar(conversao)}</div><div class="saldos"><div class="saldo fardos"><span>Fardos fechados</span><strong>${numero(produto.fardos_fechados)}</strong></div><div class="saldo pacotes"><span>Pacotes disponíveis</span><strong>${numero(produto.fracionado_novo)}</strong></div><div class="saldo descarte"><span>Descarte pendente</span><strong>${numero(produto.descarte_pendente)}</strong></div></div>`;
+    if(typeof produto.participa_carga_atual==="boolean"&&produto.participa_carga_atual===true){
+      const fardos=produto.fardos_fechados,habilitada=typeof fardos==="number"&&Number.isInteger(fardos)&&fardos>=1&&typeof porFardo==="number"&&Number.isInteger(porFardo)&&porFardo>0;
+      const area=document.createElement("div");area.className="abrir-fardo";
+      if(controleIdempotenciaIndisponivel){
+        const aviso=document.createElement("div");aviso.className="indisponivel";aviso.textContent="Abertura bloqueada: controle de tentativa indisponível";area.appendChild(aviso);
+      }else if(habilitada){
+        const botao=document.createElement("button");botao.type="button";botao.className="button";botao.textContent="Abrir 1 fardo";
+        botao.disabled=mutacaoAtiva||aberturaConfirmadaSemRecarga;botao.addEventListener("click",()=>selecionarAbertura(produto));area.appendChild(botao);
+      }else{
+        const aviso=document.createElement("div");aviso.className="indisponivel";aviso.textContent=fardos<1?"Sem fardo disponível":"Conversão inválida para abertura";area.appendChild(aviso);
+      }
+      cartao.appendChild(area);
+    }
     lista.appendChild(cartao);
   }
 }
@@ -191,6 +339,101 @@ function renderizarSolicitacoes(solicitacoes,produtos){
 
 let versaoCarregamento=0;
 let controladorCarregamento=null;
+let cargaAtual=null;
+let produtosAtuais=[];
+let mutacaoAtiva=false;
+let aberturaSelecionada=null;
+let aberturaConfirmadaSemRecarga=false;
+let versaoMutacao=0;
+let paginaAtiva=true;
+
+function mensagemAbertura(texto,tipo=""){
+  const el=document.getElementById("mensagemAbertura");el.textContent=texto;el.className=`mensagem-mutacao ${tipo}`;el.classList.toggle("hidden",!texto);
+}
+function atualizarControlesAbertura(){
+  const bloqueado=mutacaoAtiva||aberturaConfirmadaSemRecarga||controleIdempotenciaIndisponivel;
+  const camposBloqueados=bloqueado||aberturaSelecionada?.indeterminada===true;
+  document.getElementById("confirmarAbertura").disabled=bloqueado||!document.getElementById("confirmacaoFisica").checked;
+  document.getElementById("cancelarAbertura").disabled=mutacaoAtiva;
+  document.getElementById("dataAbertura").disabled=camposBloqueados;
+  document.getElementById("observacaoAbertura").disabled=camposBloqueados;
+  document.getElementById("confirmacaoFisica").disabled=bloqueado;
+}
+function selecionarAbertura(produto){
+  if(controleIdempotenciaIndisponivel){setStatus(mensagemControleIndisponivel,"err");return}
+  if(mutacaoAtiva||aberturaConfirmadaSemRecarga||!cargaAtual||typeof produto.participa_carga_atual!=="boolean"||produto.participa_carga_atual!==true)return;
+  const fardos=produto.fardos_fechados,pacotes=produto.fracionado_novo,conversao=produto.pacotes_por_fardo;
+  if(typeof fardos!=="number"||!Number.isInteger(fardos)||fardos<1||typeof conversao!=="number"||!Number.isInteger(conversao)||conversao<=0)return;
+  const pendente=tentativaPendente(cargaAtual.id,produto.produto_id);
+  if(pendente?.erro){setStatus(mensagemControleIndisponivel,"err");renderizarProdutos(produtosAtuais);return}
+  const tentativaIndeterminada=pendente?.estado==="PENDENTE",marcadorConfirmado=pendente?.estado==="CONFIRMADA"?pendente:null;
+  aberturaSelecionada={produtoId:Number(produto.produto_id),produtoNome:String(produto.produto_nome||`Produto #${produto.produto_id}`),cargaId:Number(cargaAtual.id),localId:Number(cargaAtual.local_carga_id),fardos,pacotes:typeof pacotes==="number"&&Number.isFinite(pacotes)?pacotes:null,conversao,chave:tentativaIndeterminada?pendente.chave:gerarChaveAbertura(),indeterminada:tentativaIndeterminada,marcadorConfirmado};
+  document.getElementById("produtoAbertura").textContent=aberturaSelecionada.produtoNome;
+  document.getElementById("fardosAntes").textContent=numero(fardos);
+  document.getElementById("pacotesAntes").textContent=numero(aberturaSelecionada.pacotes);
+  document.getElementById("conversaoAbertura").textContent=`1 fardo → ${numero(conversao)} pacotes novos`;
+  document.getElementById("resultadoAbertura").textContent=`${numero(fardos-1)} fardo(s) e ${aberturaSelecionada.pacotes===null?"—":numero(aberturaSelecionada.pacotes+conversao)} pacote(s)`;
+  document.getElementById("dataAbertura").value=tentativaIndeterminada?pendente.data:dataCuiaba();document.getElementById("observacaoAbertura").value=tentativaIndeterminada?pendente.observacao:"";document.getElementById("confirmacaoFisica").checked=false;
+  mensagemAbertura(tentativaIndeterminada?"Existe uma tentativa anterior sem confirmação definitiva. Os dados foram bloqueados; repita usando a mesma chave.":marcadorConfirmado?"A abertura anterior já foi confirmada. Confirme fisicamente apenas se deseja iniciar uma nova abertura.":"");
+  document.getElementById("modalAbertura").classList.remove("hidden");atualizarControlesAbertura();document.getElementById("confirmacaoFisica").focus();
+}
+function fecharAbertura(){
+  if(mutacaoAtiva||aberturaConfirmadaSemRecarga)return;
+  document.getElementById("modalAbertura").classList.add("hidden");aberturaSelecionada=null;
+}
+function alterarTentativaAbertura(){
+  if(aberturaSelecionada&&!aberturaSelecionada.indeterminada&&!mutacaoAtiva&&!aberturaConfirmadaSemRecarga)aberturaSelecionada.chave=gerarChaveAbertura();
+}
+
+async function confirmarAbertura(){
+  if(mutacaoAtiva||aberturaConfirmadaSemRecarga||!aberturaSelecionada||!document.getElementById("confirmacaoFisica").checked)return;
+  const selecao=Object.freeze({...aberturaSelecionada,data:document.getElementById("dataAbertura").value,observacao:normalizarObservacao(document.getElementById("observacaoAbertura").value)});
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(selecao.data)){mensagemAbertura("Informe uma data válida.","err");return}
+  if(selecao.observacao.length>500){mensagemAbertura("A observação deve ter no máximo 500 caracteres.","err");return}
+  if(!cargaAtual||Number(cargaAtual.id)!==selecao.cargaId){mensagemAbertura("A carga mudou. Atualize a página antes de continuar.","err");return}
+  if(typeof selecao.fardos!=="number"||!Number.isInteger(selecao.fardos)||selecao.fardos<1
+    ||typeof selecao.conversao!=="number"||!Number.isInteger(selecao.conversao)||selecao.conversao<=0){mensagemAbertura("Os dados oficiais do produto não permitem a abertura.","err");return}
+  const numeroMutacao=++versaoMutacao;
+  const contexto=Object.freeze({...selecao,numeroMutacao,vendedorId:vendedorIdSessao,tokenSessao:token,assinatura:assinaturaTentativa(selecao)});
+  const contextoAtual=()=>paginaAtiva&&numeroMutacao===versaoMutacao&&mutacaoAtiva
+    &&localStorage.getItem("token")===contexto.tokenSessao&&localStorage.getItem("vendedorRole")==="vendedor"
+    &&aberturaSelecionada?.chave===contexto.chave&&assinaturaTentativa({...aberturaSelecionada,data:contexto.data,observacao:contexto.observacao})===contexto.assinatura;
+  mutacaoAtiva=true;atualizarControlesAbertura();renderizarProdutos(produtosAtuais);mensagemAbertura("Registrando a abertura. Não feche esta tela...");
+  if(!persistirTentativa(contexto)){
+    mutacaoAtiva=false;aberturaSelecionada.indeterminada=true;atualizarControlesAbertura();renderizarProdutos(produtosAtuais);mensagemAbertura(mensagemControleIndisponivel,"err");return;
+  }
+  try{
+    const payload={chave_idempotencia:contexto.chave,data_operacao:contexto.data};if(contexto.observacao)payload.observacao=contexto.observacao;
+    const {dados,status}=await apiPost(`/api/minha-carga/fardos/${contexto.produtoId}/abertura`,payload);
+    if(!contextoAtual())return;
+    if(status!==200&&status!==201||!operacaoAberturaCompativel(dados,contexto)){
+      aberturaSelecionada.indeterminada=true;atualizarControlesAbertura();mensagemAbertura("A resposta não comprovou integralmente a abertura. Repita com a mesma chave; os dados permanecerão bloqueados.","err");return;
+    }
+    if(!confirmarTentativa(contexto)){
+      controleIdempotenciaIndisponivel=true;aberturaConfirmadaSemRecarga=true;aberturaSelecionada.indeterminada=true;
+      atualizarControlesAbertura();renderizarProdutos(produtosAtuais);
+      mensagemAbertura("A abertura foi registrada, mas o controle local não pôde ser confirmado. Atualize a página e repita somente com a mesma chave, ou procure o administrador.","err");return;
+    }
+    mensagemAbertura(status===200?"A abertura já estava registrada. Atualizando saldos...":"Abertura registrada. Atualizando saldos...","ok");
+    const recarregou=await carregar();
+    if(!paginaAtiva||numeroMutacao!==versaoMutacao||localStorage.getItem("token")!==contexto.tokenSessao||localStorage.getItem("vendedorRole")!=="vendedor")return;
+    if(!recarregou){aberturaConfirmadaSemRecarga=true;mensagemAbertura("A abertura foi gravada, mas não foi possível atualizar os saldos. Não tente abrir novamente; atualize a página.","err");return}
+    aberturaSelecionada=null;document.getElementById("modalAbertura").classList.add("hidden");setStatus(status===200?"Abertura já registrada; saldos atualizados.":"Abertura registrada; saldos atualizados.","ok");
+  }catch(erro){
+    if(!contextoAtual())return;
+    if(typeof erro?.corpo?.chave_idempotencia==="string"&&erro.corpo.chave_idempotencia.trim()){
+      if(!substituirChaveTentativa(contexto,erro.corpo.chave_idempotencia)){controleIdempotenciaIndisponivel=true;aberturaSelecionada.indeterminada=true;mensagemAbertura(mensagemControleIndisponivel,"err");return}
+      aberturaSelecionada.chave=erro.corpo.chave_idempotencia;
+    }
+    if(erro?.status===401){paginaAtiva=false;versaoMutacao++;["token","vendedorId","vendedorNome","vendedorRole"].forEach(chave=>localStorage.removeItem(chave));alert("Sua sessão expirou. Faça login novamente.");location.href="login.html";return}
+    if(erro?.status===400||erro?.status===403){removerTentativa({...contexto,chave:aberturaSelecionada.chave});aberturaSelecionada.indeterminada=false}
+    else{aberturaSelecionada.indeterminada=true}
+    const mensagens={400:"Dados inválidos. Confira a data e tente novamente com a mesma chave.",403:"Você não possui permissão para esta abertura.",409:"A abertura foi recusada pelo estado atual. Corrija a situação e repita com a mesma chave.",503:"O resultado é indeterminado. Tente novamente com o mesmo botão e a mesma chave."};
+    mensagemAbertura(mensagens[erro?.status]||`${erro.message||"Não foi possível registrar a abertura."} A mesma chave será preservada.`,"err");
+  }finally{
+    if(paginaAtiva&&numeroMutacao===versaoMutacao&&mutacaoAtiva){mutacaoAtiva=false;atualizarControlesAbertura();renderizarProdutos(produtosAtuais)}
+  }
+}
 
 async function carregar(){
   const versaoAtual=++versaoCarregamento;
@@ -199,18 +442,19 @@ async function carregar(){
   controladorCarregamento=controlador;
   const contextoAtual=()=>versaoAtual===versaoCarregamento
     &&controladorCarregamento===controlador&&!controlador.signal.aborted;
-  if(!contextoAtual())return;
+  if(!contextoAtual())return false;
   setStatus("Carregando sua carga...");document.getElementById("semCarga").classList.add("hidden");document.getElementById("conteudoCarga").classList.add("hidden");
   try{
     const opcoes={signal:controlador.signal};
     const [dadosCarga,dadosSaldos]=await Promise.all([apiGet("/api/minha-carga",opcoes),apiGet("/api/minha-carga/saldo-pacotes",opcoes)]);
-    if(!contextoAtual())return;
-    if(!dadosCarga.carga){document.getElementById("semCarga").classList.remove("hidden");setStatus("Nenhuma carga aberta encontrada para o seu usuário.");return}
+    if(!contextoAtual())return false;
+    if(!dadosCarga.carga){cargaAtual=null;produtosAtuais=[];document.getElementById("semCarga").classList.remove("hidden");setStatus("Nenhuma carga aberta encontrada para o seu usuário.");return true}
     const carga=dadosCarga.carga,produtos=consolidarProdutos(dadosCarga.produtos,dadosSaldos.saldos);
+    cargaAtual=carga;produtosAtuais=produtos;
     document.getElementById("cargaId").textContent=`Carga #${carga.id}`;document.getElementById("cargaData").textContent=dataBR(carga.data_carga);document.getElementById("cargaLocal").textContent=carga.local_nome||`Local #${carga.local_carga_id}`;
-    renderizarProdutos(produtos);renderizarSolicitacoes(dadosCarga.bonificacoes_fardo,produtos);document.getElementById("conteudoCarga").classList.remove("hidden");setStatus("Carga e saldos atualizados.","ok");
+    renderizarProdutos(produtos);renderizarSolicitacoes(dadosCarga.bonificacoes_fardo,produtos);document.getElementById("conteudoCarga").classList.remove("hidden");setStatus(controleIdempotenciaIndisponivel?mensagemControleIndisponivel:"Carga e saldos atualizados.",controleIdempotenciaIndisponivel?"err":"ok");return true;
   }catch(erro){
-    if(!contextoAtual()||erro?.name==="AbortError")return;
+    if(!contextoAtual()||erro?.name==="AbortError")return false;
     if(erro?.status===401){
       if(!contextoAtual())return;
       ["token","vendedorId","vendedorNome","vendedorRole"].forEach(chave=>localStorage.removeItem(chave));
@@ -218,15 +462,25 @@ async function carregar(){
       alert("Sua sessão expirou. Faça login novamente.");
       if(!contextoAtual())return;
       location.href="login.html";
-      return;
+      return false;
     }
     if(!contextoAtual())return;
     setStatus(erro.message||"Não foi possível carregar sua carga.","err");
+    return false;
   }finally{
     if(versaoAtual===versaoCarregamento&&controladorCarregamento===controlador)controladorCarregamento=null;
   }
 }
 
+document.getElementById("confirmacaoFisica").addEventListener("change",atualizarControlesAbertura);
+document.getElementById("dataAbertura").addEventListener("change",alterarTentativaAbertura);
+document.getElementById("observacaoAbertura").addEventListener("input",alterarTentativaAbertura);
+document.getElementById("cancelarAbertura").addEventListener("click",fecharAbertura);
+document.getElementById("confirmarAbertura").addEventListener("click",confirmarAbertura);
+document.querySelector('a[href="dashboard.html"]')?.addEventListener("click",()=>{paginaAtiva=false;versaoMutacao++});
+addEventListener("pagehide",()=>{paginaAtiva=false;versaoMutacao++});
+
+lerTentativasAbertura();
 if(token&&role==="vendedor")carregar();
 </script>
 </body>
