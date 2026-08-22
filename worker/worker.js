@@ -4163,6 +4163,8 @@ async function fecharCargaVendedor(request, env, user, cargaId) {
   const cargaAtual = await env.DB.prepare("SELECT id, status, local_carga_id FROM estoque_cargas WHERE id = ?").bind(cargaId).first();
   if (!cargaAtual) return json({ error: "Carga não encontrada." }, 404);
   if (cargaAtual.status !== "ABERTA") return json({ error: "Somente cargas abertas podem ser fechadas." }, 409);
+  const pacotePreparando = await env.DB.prepare("SELECT id FROM estoque_pacote_operacoes WHERE carga_id = ? AND status = 'PREPARANDO' LIMIT 1").bind(cargaId).first();
+  if (pacotePreparando) return json({ error: "Existe uma operação por pacote em preparação nesta carga." }, 409);
   const centralId = Number(linhas[0]?.central_id || (await obterEstoqueCentral(env))?.id || 0);
   if (!centralId) return json({ error: "Estoque Central ativo não encontrado." }, 409);
   if (linhas.some(linha => Number(linha.saldo_atual) < 0)) return json({ error: "Há saldo negativo no veículo. Use Conferir saldo antes de fechar." }, 409);
@@ -4181,6 +4183,7 @@ async function fecharCargaVendedor(request, env, user, cargaId) {
     FROM estoque_cargas carga
     WHERE carga.id = ? AND carga.status = 'ABERTA' AND carga.local_carga_id = ?
       AND EXISTS (SELECT 1 FROM estoque_locais WHERE id = ? AND tipo = 'CENTRAL' AND ativo = 1)
+      AND NOT EXISTS (SELECT 1 FROM estoque_pacote_operacoes pacote WHERE pacote.carga_id = carga.id AND pacote.status = 'PREPARANDO')
       AND NOT EXISTS (SELECT 1 FROM estoque_operacoes WHERE chave_idempotencia = ?)
       AND ${conjuntoExato} AND ${saldosIguais}
   `).bind(obterDataLocalCuiaba(), chave, user.vendedorId, observacaoAuditoria, cargaId, cargaAtual.local_carga_id, centralId, chave)];
@@ -4199,6 +4202,7 @@ async function fecharCargaVendedor(request, env, user, cargaId) {
   statements.push(env.DB.prepare(`
     UPDATE estoque_cargas SET status = 'FECHADA', fechada_em = CURRENT_TIMESTAMP, fechada_por = ?, observacoes_fechamento = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ? AND status = 'ABERTA' AND EXISTS (SELECT 1 FROM estoque_operacoes WHERE chave_idempotencia = ?)
+      AND NOT EXISTS (SELECT 1 FROM estoque_pacote_operacoes pacote WHERE pacote.carga_id = estoque_cargas.id AND pacote.status = 'PREPARANDO')
       AND NOT EXISTS (SELECT 1 FROM estoque_movimentacoes WHERE local_id = estoque_cargas.local_carga_id GROUP BY produto_id HAVING SUM(quantidade * efeito) <> 0)
   `).bind(user.vendedorId, observacao, cargaId, chave));
   statements.push(env.DB.prepare(`
@@ -4221,6 +4225,525 @@ async function fecharCargaVendedor(request, env, user, cargaId) {
   if (!carga || falhaAuditoria) throw new Error(`Fechamento não confirmado após a transação: ${falhaAuditoria || "carga não encontrada"}`);
   return json({ success: true, idempotente: false, carga }, 201);
 }
+
+const MOTIVOS_TROCA_PACOTE = new Set(["VENCIMENTO", "AVARIA", "QUALIDADE", "OUTRO"]);
+const MOTIVOS_BONIFICACAO = new Set(["NOVO_CLIENTE", "CONQUISTA_ESPACO", "ACAO_PROMOCIONAL", "VOLUME_NEGOCIADO", "RELACIONAMENTO", "OUTRO"]);
+
+function inteiroPositivo(valor) {
+  const numero = Number(valor);
+  return Number.isSafeInteger(numero) && numero > 0 ? numero : 0;
+}
+
+function validarChavePacote(valor) {
+  const chave = normalizeText(valor);
+  return chave && chave.length <= 130 ? chave : null;
+}
+
+function inteiroQueryOpcional(url, nome, minimo = 1, maximo = Number.MAX_SAFE_INTEGER) {
+  if (!url.searchParams.has(nome)) return { presente: false, valor: null };
+  const texto = normalizeText(url.searchParams.get(nome));
+  if (!/^\d+$/.test(texto)) return { presente: true, erro: true };
+  const valor = Number(texto);
+  return Number.isSafeInteger(valor) && valor >= minimo && valor <= maximo
+    ? { presente: true, valor }
+    : { presente: true, erro: true };
+}
+
+async function cargaAbertaDoVendedor(env, vendedorId) {
+  return env.DB.prepare(`SELECT c.id, c.local_carga_id, c.vendedor_id, c.data_carga, c.status, l.nome AS local_nome
+    FROM estoque_cargas c INNER JOIN estoque_locais l ON l.id=c.local_carga_id
+    WHERE c.vendedor_id=? AND c.status='ABERTA' AND l.tipo='CARGA_VENDEDOR' AND l.ativo=1
+    ORDER BY c.id DESC LIMIT 1`).bind(vendedorId).first();
+}
+
+async function operacaoPacotePorChave(env, chave) {
+  const operacao = await env.DB.prepare(`SELECT id,tipo,status,carga_id,local_carga_id,vendedor_id,produto_id,
+    quantidade_pacotes,pacotes_por_fardo_snapshot,estoque_operacao_fardo_id,visita_id,cliente_id,
+    cliente_avulso_id,motivo,observacao,chave_idempotencia,idempotencia_hash,operacao_estornada_id,
+    usuario_id,data_operacao,created_at,confirmado_em,estornada_em,
+    (SELECT status FROM estoque_pacote_operacoes original WHERE original.id=estoque_pacote_operacoes.operacao_estornada_id) AS operacao_estornada_status
+    FROM estoque_pacote_operacoes WHERE chave_idempotencia=?`).bind(chave).first();
+  if (!operacao) return null;
+  const movimentos = await env.DB.prepare(`SELECT id,bucket,quantidade_pacotes,efeito,created_at
+    FROM estoque_pacote_movimentacoes WHERE operacao_id=? ORDER BY id`).bind(operacao.id).all();
+  return { ...operacao, movimentos: movimentos.results || [] };
+}
+
+function semHashes(registro) {
+  if (!registro) return registro;
+  const copia = { ...registro };
+  delete copia.idempotencia_hash;
+  delete copia.idempotencia_hash_decisao;
+  delete copia.idempotencia_hash_entrega;
+  delete copia.idempotencia_hash_cancelamento;
+  delete copia.chave_idempotencia;
+  delete copia.chave_decisao;
+  delete copia.chave_entrega;
+  delete copia.chave_cancelamento;
+  return copia;
+}
+
+function respostaConflitoIdempotencia(chaveCliente, mensagem = "A chave de idempotência já foi usada com conteúdo diferente.") {
+  return json({ error: mensagem, chave_idempotencia: chaveCliente }, 409);
+}
+
+function respostaIndeterminadaIdempotencia(chaveCliente) {
+  return json({ error: "Resultado da operação indeterminado; consulte novamente com a mesma chave.", chave_idempotencia: chaveCliente }, 503);
+}
+
+function respostaOperacaoPacoteExistente(existente, hash, chaveCliente) {
+  return existente.idempotencia_hash === hash
+    ? json({ success: true, idempotente: true, operacao: semHashes(existente) })
+    : respostaConflitoIdempotencia(chaveCliente);
+}
+
+function respostaErroPacote(err, chaveCliente) {
+  const detalhe = normalizeText(err?.message);
+  if (/saldo|insuficiente|incoerente|imutavel|inversa|estorn|visita nao esta ativa|constraint|unique/i.test(detalhe)) {
+    return respostaConflitoIdempotencia(chaveCliente, "Operação recusada pelo estado atual ou pelas regras de estoque.");
+  }
+  return respostaIndeterminadaIdempotencia(chaveCliente);
+}
+
+function resultadosBatchValidos(resultados, quantidadeEsperada, retornos = {}) {
+  if (!Array.isArray(resultados) || resultados.length !== quantidadeEsperada) return false;
+  return resultados.every((resultado, indice) => {
+    if (!resultado || resultado.success !== true) return false;
+    const retorno = retornos[indice];
+    if (!retorno) return true;
+    if (!Array.isArray(resultado.results) || resultado.results.length !== retorno.linhas) return false;
+    return !retorno.idInteiroPositivo || resultado.results.every(linha =>
+      Number.isSafeInteger(Number(linha?.id)) && Number(linha.id) > 0);
+  });
+}
+
+function operacaoPacoteCompleta(operacao) {
+  if (!operacao || operacao.status !== "CONFIRMADA" || !Array.isArray(operacao.movimentos)) return false;
+  const movimentos = operacao.movimentos;
+  const movimento = (bucket, efeito) => movimentos.some(item => item.bucket === bucket
+    && Number(item.efeito) === efeito && Number(item.quantidade_pacotes) === Number(operacao.quantidade_pacotes));
+  if (operacao.tipo === "ABERTURA_FARDO") return movimentos.length === 1 && movimento("FRACIONADO_NOVO", 1);
+  if (operacao.tipo === "TROCA") return movimentos.length === 2
+    && movimento("FRACIONADO_NOVO", -1) && movimento("DESCARTE_PENDENTE", 1);
+  if (["DEGUSTACAO", "BONIFICACAO_PACOTE"].includes(operacao.tipo)) {
+    return movimentos.length === 1 && movimento("FRACIONADO_NOVO", -1);
+  }
+  if (operacao.tipo === "CONFIRMACAO_DESCARTE") {
+    return movimentos.length === 1 && movimento("DESCARTE_PENDENTE", -1);
+  }
+  if (operacao.tipo === "ESTORNO") return movimentos.length > 0 && operacao.operacao_estornada_status === "ESTORNADA";
+  return false;
+}
+
+function respostaOperacaoPacoteRecuperada(operacao, hash, chaveCliente) {
+  if (!operacao) return respostaIndeterminadaIdempotencia(chaveCliente);
+  if (operacao.idempotencia_hash !== hash) return respostaConflitoIdempotencia(chaveCliente);
+  if (!operacaoPacoteCompleta(operacao)) return respostaIndeterminadaIdempotencia(chaveCliente);
+  return json({ success: true, idempotente: true, operacao: semHashes(operacao) });
+}
+
+async function executarPacoteIdempotente(env, chaveInterna, chaveCliente, hash, statements, retornos = {}) {
+  const existente = await operacaoPacotePorChave(env, chaveInterna);
+  if (existente) return respostaOperacaoPacoteRecuperada(existente, hash, chaveCliente);
+  let resultados;
+  try { resultados = await env.DB.batch(statements); }
+  catch (err) {
+    let recuperada;
+    try { recuperada = await operacaoPacotePorChave(env, chaveInterna); }
+    catch { return respostaIndeterminadaIdempotencia(chaveCliente); }
+    if (recuperada) return respostaOperacaoPacoteRecuperada(recuperada, hash, chaveCliente);
+    if (Object.keys(retornos).length && /visita nao esta ativa/i.test(normalizeText(err?.message))) {
+      return respostaConflitoIdempotencia(chaveCliente, "A visita deixou de estar ativa antes da confirmação.");
+    }
+    return respostaIndeterminadaIdempotencia(chaveCliente);
+  }
+  if (!resultadosBatchValidos(resultados, statements.length, retornos)) {
+    let recuperada;
+    try { recuperada = await operacaoPacotePorChave(env, chaveInterna); }
+    catch { return respostaIndeterminadaIdempotencia(chaveCliente); }
+    if (recuperada) return respostaOperacaoPacoteRecuperada(recuperada, hash, chaveCliente);
+    const retornoVazio = Object.entries(retornos).some(([indice, contrato]) => {
+      const resultado = resultados?.[Number(indice)];
+      return resultado?.success === true && Array.isArray(resultado.results)
+        && resultado.results.length !== contrato.linhas;
+    });
+    if (retornoVazio) return respostaConflitoIdempotencia(chaveCliente,
+      "A visita deixou de estar ativa ou os dados operacionais mudaram antes da gravação.");
+    return respostaIndeterminadaIdempotencia(chaveCliente);
+  }
+  let operacao;
+  try { operacao = await operacaoPacotePorChave(env, chaveInterna); }
+  catch { return respostaIndeterminadaIdempotencia(chaveCliente); }
+  if (!operacao || operacao.idempotencia_hash !== hash || !operacaoPacoteCompleta(operacao)) {
+    return respostaIndeterminadaIdempotencia(chaveCliente);
+  }
+  return json({ success: true, idempotente: false, operacao: semHashes(operacao) }, 201);
+}
+
+function movimentoPacoteStmt(env, chave, bucket, quantidade, efeito) {
+  return env.DB.prepare(`INSERT INTO estoque_pacote_movimentacoes
+    (operacao_id,carga_id,local_carga_id,produto_id,bucket,quantidade_pacotes,efeito,created_at)
+    SELECT id,carga_id,local_carga_id,produto_id,?,?,?,CURRENT_TIMESTAMP
+    FROM estoque_pacote_operacoes WHERE chave_idempotencia=? AND status='PREPARANDO'`)
+    .bind(bucket, quantidade, efeito, chave);
+}
+
+function confirmarPacoteStmt(env, chave) {
+  return env.DB.prepare(`UPDATE estoque_pacote_operacoes SET status='CONFIRMADA',confirmado_em=CURRENT_TIMESTAMP
+    WHERE chave_idempotencia=? AND status='PREPARANDO'`).bind(chave);
+}
+
+function sentinelaPacoteStmt(env, chave) {
+  return env.DB.prepare(`INSERT INTO estoque_pacote_movimentacoes
+    (operacao_id,carga_id,local_carga_id,produto_id,bucket,quantidade_pacotes,efeito)
+    SELECT 0,0,0,0,'FRACIONADO_NOVO',0,0 WHERE NOT EXISTS(
+      SELECT 1 FROM estoque_pacote_operacoes WHERE chave_idempotencia=? AND status='CONFIRMADA')`).bind(chave);
+}
+
+async function minhaCarga(env, user) {
+  if (!usuarioTemRole(user, "vendedor")) return acessoNegado();
+  const carga = await cargaAbertaDoVendedor(env, user.vendedorId);
+  if (!carga) return json({ carga: null, produtos: [], bonificacoes_fardo: [] });
+  const [produtos, bonificacoes] = await Promise.all([
+    env.DB.prepare(`SELECT p.id produto_id,p.nome produto_nome,p.pacotes_por_fardo,
+      COALESCE((SELECT SUM(m.quantidade*m.efeito) FROM estoque_movimentacoes m WHERE m.local_id=c.local_carga_id AND m.produto_id=p.id),0) AS fardos_fechados,
+      COALESCE((SELECT SUM(pm.quantidade_pacotes*pm.efeito) FROM estoque_pacote_movimentacoes pm JOIN estoque_pacote_operacoes po ON po.id=pm.operacao_id WHERE po.status IN('CONFIRMADA','ESTORNADA') AND pm.local_carga_id=c.local_carga_id AND pm.produto_id=p.id AND pm.bucket='FRACIONADO_NOVO'),0) AS fracionado_novo,
+      COALESCE((SELECT SUM(pm.quantidade_pacotes*pm.efeito) FROM estoque_pacote_movimentacoes pm JOIN estoque_pacote_operacoes po ON po.id=pm.operacao_id WHERE po.status IN('CONFIRMADA','ESTORNADA') AND pm.local_carga_id=c.local_carga_id AND pm.produto_id=p.id AND pm.bucket='DESCARTE_PENDENTE'),0) AS descarte_pendente
+      FROM (SELECT produto_id FROM estoque_carga_itens WHERE carga_id=?
+        UNION
+        SELECT pm.produto_id FROM estoque_pacote_movimentacoes pm
+        JOIN estoque_pacote_operacoes po ON po.id=pm.operacao_id
+        WHERE pm.local_carga_id=? AND po.status IN('CONFIRMADA','ESTORNADA')) pl
+      JOIN produtos p ON p.id=pl.produto_id CROSS JOIN estoque_cargas c
+      WHERE c.id=? GROUP BY p.id ORDER BY p.nome`).bind(carga.id,carga.local_carga_id,carga.id).all(),
+    env.DB.prepare(`SELECT id,status,visita_id,produto_id,quantidade_fardos,motivo,solicitada_em,decidida_em
+      FROM bonificacao_fardo_solicitacoes WHERE vendedor_id=? AND carga_id=? AND status IN('PENDENTE','APROVADA') ORDER BY id DESC`)
+      .bind(user.vendedorId, carga.id).all()
+  ]);
+  return json({ carga, produtos: produtos.results || [], bonificacoes_fardo: bonificacoes.results || [] });
+}
+
+async function saldoPacotes(request, env, user, proprio = false) {
+  if (proprio && !usuarioTemRole(user, "vendedor")) return acessoNegado();
+  if (!proprio && !usuarioTemRole(user, "admin", "operacao")) return acessoNegado();
+  const url = new URL(request.url);
+  const carga = proprio ? await cargaAbertaDoVendedor(env, user.vendedorId) : null;
+  if (proprio && !carga) return json({ saldos: [] });
+  const filtros = ["o.status IN('CONFIRMADA','ESTORNADA')"];
+  const parametros = [];
+  if (proprio) { filtros.push("m.local_carga_id=?"); parametros.push(carga.local_carga_id); }
+  else {
+    for (const [nome, coluna] of [["local_carga_id","m.local_carga_id"],["vendedor_id","l.vendedor_id"],["produto_id","m.produto_id"]]) {
+      const parametro = inteiroQueryOpcional(url,nome); if(parametro.erro)return json({error:`${nome} deve ser inteiro positivo.`},400);
+      if (parametro.presente) { filtros.push(`${coluna}=?`); parametros.push(parametro.valor); }
+    }
+  }
+  const resultado = await env.DB.prepare(`SELECT m.local_carga_id,MAX(l.vendedor_id) vendedor_id,m.produto_id,p.nome produto_nome,m.bucket,
+    SUM(m.quantidade_pacotes*m.efeito) saldo FROM estoque_pacote_movimentacoes m
+    JOIN estoque_pacote_operacoes o ON o.id=m.operacao_id JOIN produtos p ON p.id=m.produto_id
+    JOIN estoque_locais l ON l.id=m.local_carga_id
+    WHERE ${filtros.join(" AND ")} GROUP BY m.local_carga_id,m.produto_id,m.bucket ORDER BY m.local_carga_id,m.produto_id,m.bucket`)
+    .bind(...parametros).all();
+  return json({ saldos: resultado.results || [] });
+}
+
+async function abrirFardoPacote(request, env, user, produtoId) {
+  if (!usuarioTemRole(user, "vendedor")) return acessoNegado();
+  produtoId = inteiroPositivo(produtoId); if (!produtoId) return json({ error: "Produto inválido." }, 400);
+  const dados = await request.json(), chaveCliente = validarChavePacote(dados.chave_idempotencia);
+  const data = normalizeText(dados.data_operacao || obterDataLocalCuiaba()), observacao = normalizeText(dados.observacao);
+  if (!chaveCliente || !dataOperacionalValida(data) || observacao.length > 500) return json({ error: "Chave, data ou observação inválida." }, 400);
+  const chave=`PACOTE:ABERTURA_FARDO:${chaveCliente}`;
+  const existente=await operacaoPacotePorChave(env,chave);
+  if(existente){const hash=await hashTexto(JSON.stringify({tipo:"ABERTURA_FARDO",vendedor_id:user.vendedorId,carga_id:Number(existente.carga_id),produto_id:produtoId,quantidade:Number(existente.quantidade_pacotes),data,observacao}));return respostaOperacaoPacoteExistente(existente,hash,chaveCliente);}
+  const carga = await cargaAbertaDoVendedor(env, user.vendedorId);
+  if (!carga) return respostaConflitoIdempotencia(chaveCliente, "Vendedor sem carga aberta.");
+  const produto = await env.DB.prepare(`SELECT p.id,p.pacotes_por_fardo FROM produtos p JOIN estoque_carga_itens ci ON ci.produto_id=p.id
+    WHERE p.id=? AND p.ativo='ativo' AND ci.carga_id=?`).bind(produtoId,carga.id).first();
+  const quantidade = Number(produto?.pacotes_por_fardo); if (!Number.isSafeInteger(quantidade)||quantidade<=0) return respostaConflitoIdempotencia(chaveCliente, "Produto sem conversão válida de pacotes por fardo.");
+  const chaveFardo=`ABERTURA_FARDO:${chaveCliente}`;
+  const hash=await hashTexto(JSON.stringify({tipo:"ABERTURA_FARDO",vendedor_id:user.vendedorId,carga_id:carga.id,produto_id:produtoId,quantidade,data,observacao}));
+  const statements=[
+    env.DB.prepare(`INSERT INTO estoque_operacoes(tipo,status,data_operacao,origem_tipo,origem_id,chave_idempotencia,usuario_id,observacao,created_at)
+      SELECT 'ABERTURA_FARDO','CONFIRMADA',?,'CARGA',c.id,?,?,?,CURRENT_TIMESTAMP FROM estoque_cargas c
+      WHERE c.id=? AND c.status='ABERTA' AND NOT EXISTS(SELECT 1 FROM estoque_operacoes WHERE chave_idempotencia=?)
+      AND c.vendedor_id=? AND c.local_carga_id=?
+      AND EXISTS(SELECT 1 FROM estoque_carga_itens ci JOIN produtos p ON p.id=ci.produto_id
+        WHERE ci.carga_id=c.id AND p.id=? AND p.ativo='ativo' AND typeof(p.pacotes_por_fardo)='integer' AND p.pacotes_por_fardo=?)
+      AND (SELECT COALESCE(SUM(quantidade*efeito),0) FROM estoque_movimentacoes WHERE local_id=c.local_carga_id AND produto_id=?)>=1`)
+      .bind(data,chaveFardo,user.vendedorId,observacao||null,carga.id,chaveFardo,user.vendedorId,carga.local_carga_id,produtoId,quantidade,produtoId),
+    env.DB.prepare(`INSERT INTO estoque_movimentacoes(operacao_id,local_id,produto_id,carga_id,carga_item_id,quantidade,efeito,created_at)
+      SELECT o.id,c.local_carga_id,?,c.id,ci.id,1,-1,CURRENT_TIMESTAMP FROM estoque_operacoes o JOIN estoque_cargas c ON c.id=o.origem_id
+      JOIN estoque_carga_itens ci ON ci.carga_id=c.id AND ci.produto_id=? WHERE o.chave_idempotencia=?`).bind(produtoId,produtoId,chaveFardo),
+  ];
+  statements.push(env.DB.prepare(`INSERT INTO estoque_pacote_operacoes(tipo,status,carga_id,local_carga_id,vendedor_id,produto_id,quantidade_pacotes,pacotes_por_fardo_snapshot,estoque_operacao_fardo_id,observacao,chave_idempotencia,idempotencia_hash,usuario_id,data_operacao)
+    SELECT 'ABERTURA_FARDO','PREPARANDO',c.id,c.local_carga_id,c.vendedor_id,?,?,?,o.id,?,?,?,?,? FROM estoque_cargas c JOIN estoque_operacoes o ON o.chave_idempotencia=?
+    WHERE c.id=? AND c.status='ABERTA' AND c.vendedor_id=? AND c.local_carga_id=?
+      AND EXISTS(SELECT 1 FROM estoque_carga_itens ci JOIN produtos p ON p.id=ci.produto_id WHERE ci.carga_id=c.id AND p.id=? AND p.ativo='ativo' AND typeof(p.pacotes_por_fardo)='integer' AND p.pacotes_por_fardo=?)`)
+    .bind(produtoId,quantidade,quantidade,observacao||null,chave,hash,user.vendedorId,data,chaveFardo,carga.id,user.vendedorId,carga.local_carga_id,produtoId,quantidade));
+  statements.push(movimentoPacoteStmt(env,chave,"FRACIONADO_NOVO",quantidade,1),confirmarPacoteStmt(env,chave),sentinelaPacoteStmt(env,chave));
+  return executarPacoteIdempotente(env,chave,chaveCliente,hash,statements);
+}
+
+async function operacaoComercialPacote(request, env, user, visitaId, tipo) {
+  if (!usuarioTemRole(user,"vendedor")) return acessoNegado();
+  visitaId=inteiroPositivo(visitaId); if(!visitaId)return json({error:"Visita inválida."},400);
+  const d=await request.json(), produtoId=inteiroPositivo(d.produto_id), quantidade=inteiroPositivo(d.quantidade_pacotes);
+  const chaveCliente=validarChavePacote(d.chave_idempotencia), data=normalizeText(d.data_operacao||obterDataLocalCuiaba());
+  const motivo=normalizeText(d.motivo).toUpperCase(), observacao=normalizeText(d.observacao);
+  const catalogo=tipo==="TROCA"?MOTIVOS_TROCA_PACOTE:(tipo==="BONIFICACAO_PACOTE"?MOTIVOS_BONIFICACAO:null);
+  if(!produtoId||!quantidade||!chaveCliente||!dataOperacionalValida(data)||observacao.length>500)return json({error:"Dados da operação inválidos."},400);
+  if(catalogo&&(!catalogo.has(motivo)||(motivo==="OUTRO"&&!observacao)))return json({error:"Motivo ou observação inválida."},400);
+  const chave=`PACOTE:${tipo}:${chaveCliente}`;
+  const existente=await operacaoPacotePorChave(env,chave);
+  if(existente){const hash=await hashTexto(JSON.stringify({tipo,vendedor_id:user.vendedorId,carga_id:Number(existente.carga_id),visita_id:visitaId,produto_id:produtoId,quantidade,motivo:catalogo?motivo:null,observacao,data}));return respostaOperacaoPacoteExistente(existente,hash,chaveCliente);}
+  const visita=await env.DB.prepare(`SELECT id,vendedor_id,cliente_id,cliente_avulso_id,status_registro FROM visitas WHERE id=? AND vendedor_id=?`).bind(visitaId,user.vendedorId).first();
+  if(!visita)return json({error:"Visita própria não encontrada."},403);
+  if(visita.status_registro!=="ATIVA")return respostaConflitoIdempotencia(chaveCliente,"A visita não está ativa para receber a operação.");
+  const carga=await cargaAbertaDoVendedor(env,user.vendedorId); if(!carga)return respostaConflitoIdempotencia(chaveCliente,"Vendedor sem carga aberta.");
+  const item=await env.DB.prepare("SELECT id FROM estoque_carga_itens WHERE carga_id=? AND produto_id=?").bind(carga.id,produtoId).first(); if(!item)return respostaConflitoIdempotencia(chaveCliente,"Produto não pertence à carga.");
+  const hash=await hashTexto(JSON.stringify({tipo,vendedor_id:user.vendedorId,carga_id:carga.id,visita_id:visitaId,produto_id:produtoId,quantidade,motivo:catalogo?motivo:null,observacao,data}));
+  const statements=[env.DB.prepare(`INSERT INTO estoque_pacote_operacoes(tipo,status,carga_id,local_carga_id,vendedor_id,produto_id,quantidade_pacotes,visita_id,cliente_id,cliente_avulso_id,motivo,observacao,chave_idempotencia,idempotencia_hash,usuario_id,data_operacao)
+    SELECT ?,'PREPARANDO',c.id,c.local_carga_id,c.vendedor_id,?,?,?,?,?,?,?,?,?,?,? FROM estoque_cargas c
+    JOIN estoque_carga_itens ci ON ci.carga_id=c.id AND ci.produto_id=? JOIN produtos p ON p.id=ci.produto_id AND p.ativo='ativo'
+    JOIN visitas v ON v.id=? AND v.vendedor_id=c.vendedor_id AND v.status_registro='ATIVA'
+      AND COALESCE(v.cliente_id,0)=? AND COALESCE(v.cliente_avulso_id,0)=?
+    WHERE c.id=? AND c.status='ABERTA' AND c.vendedor_id=? AND c.local_carga_id=? RETURNING id`)
+    .bind(tipo,produtoId,quantidade,visitaId,visita.cliente_id||null,visita.cliente_avulso_id||null,catalogo?motivo:null,observacao||null,chave,hash,user.vendedorId,data,produtoId,visitaId,visita.cliente_id||0,visita.cliente_avulso_id||0,carga.id,user.vendedorId,carga.local_carga_id)];
+  statements.push(movimentoPacoteStmt(env,chave,"FRACIONADO_NOVO",quantidade,-1));
+  if(tipo==="TROCA")statements.push(movimentoPacoteStmt(env,chave,"DESCARTE_PENDENTE",quantidade,1));
+  statements.push(confirmarPacoteStmt(env,chave));
+  const resposta=await executarPacoteIdempotente(env,chave,chaveCliente,hash,statements,{0:{linhas:1,idInteiroPositivo:true}});
+  if(resposta.status===409&&tipo!=="TROCA")return resposta;
+  return resposta;
+}
+
+async function confirmarDescartePacote(request,env,user){
+  if(!usuarioTemRole(user,"admin","operacao"))return acessoNegado();
+  const d=await request.json(),cargaId=inteiroPositivo(d.carga_id),produtoId=inteiroPositivo(d.produto_id),quantidade=inteiroPositivo(d.quantidade_pacotes);
+  const chaveCliente=validarChavePacote(d.chave_idempotencia),data=normalizeText(d.data_operacao||obterDataLocalCuiaba()),observacao=normalizeText(d.observacao);
+  if(!cargaId||!produtoId||!quantidade||!chaveCliente||!dataOperacionalValida(data))return json({error:"Dados inválidos."},400);
+  const chave=`PACOTE:CONFIRMACAO_DESCARTE:${chaveCliente}`,hash=await hashTexto(JSON.stringify({tipo:"CONFIRMACAO_DESCARTE",carga_id:cargaId,produto_id:produtoId,quantidade,data,observacao,usuario_id:user.vendedorId}));
+  const existente=await operacaoPacotePorChave(env,chave);if(existente)return respostaOperacaoPacoteExistente(existente,hash,chaveCliente);
+  const carga=await env.DB.prepare("SELECT id,local_carga_id,vendedor_id,status FROM estoque_cargas WHERE id=? AND status IN('ABERTA','FECHADA')").bind(cargaId).first(); if(!carga)return respostaConflitoIdempotencia(chaveCliente,"Carga inexistente, cancelada ou inelegível.");
+  const statements=[env.DB.prepare(`INSERT INTO estoque_pacote_operacoes(tipo,status,carga_id,local_carga_id,vendedor_id,produto_id,quantidade_pacotes,observacao,chave_idempotencia,idempotencia_hash,usuario_id,data_operacao)
+    SELECT 'CONFIRMACAO_DESCARTE','PREPARANDO',id,local_carga_id,vendedor_id,?,?,?,?,?,?,? FROM estoque_cargas WHERE id=? AND status IN('ABERTA','FECHADA')`)
+    .bind(produtoId,quantidade,observacao||null,chave,hash,user.vendedorId,data,cargaId),movimentoPacoteStmt(env,chave,"DESCARTE_PENDENTE",quantidade,-1),confirmarPacoteStmt(env,chave),sentinelaPacoteStmt(env,chave)];
+  return executarPacoteIdempotente(env,chave,chaveCliente,hash,statements);
+}
+
+async function estornarOperacaoPacote(request,env,user,operacaoId){
+  if(!usuarioTemRole(user,"admin"))return acessoNegado(); operacaoId=inteiroPositivo(operacaoId); if(!operacaoId)return json({error:"Operação inválida."},400);
+  const d=await request.json(),chaveCliente=validarChavePacote(d.chave_idempotencia),data=normalizeText(d.data_operacao||obterDataLocalCuiaba()),observacao=normalizeText(d.observacao);
+  if(!chaveCliente||!dataOperacionalValida(data))return json({error:"Chave ou data inválida."},400);
+  const chave=`PACOTE:ESTORNO:${chaveCliente}`,hash=await hashTexto(JSON.stringify({tipo:"ESTORNO",operacao_estornada_id:operacaoId,data,observacao,usuario_id:user.vendedorId}));
+  const existente=await operacaoPacotePorChave(env,chave);if(existente)return respostaOperacaoPacoteExistente(existente,hash,chaveCliente);
+  const alvo=await env.DB.prepare("SELECT * FROM estoque_pacote_operacoes WHERE id=?").bind(operacaoId).first(); if(!alvo)return json({error:"Operação não encontrada."},404);
+  if(alvo.status!=="CONFIRMADA"||alvo.tipo==="ESTORNO")return respostaConflitoIdempotencia(chaveCliente,"Somente operação CONFIRMADA e não ESTORNO pode ser estornada.");
+  const movimentos=await env.DB.prepare("SELECT bucket,quantidade_pacotes,efeito FROM estoque_pacote_movimentacoes WHERE operacao_id=? ORDER BY id").bind(operacaoId).all();
+  const statements=[env.DB.prepare(`INSERT INTO estoque_pacote_operacoes(tipo,status,carga_id,local_carga_id,vendedor_id,produto_id,quantidade_pacotes,observacao,chave_idempotencia,idempotencia_hash,operacao_estornada_id,usuario_id,data_operacao)
+    SELECT 'ESTORNO','PREPARANDO',carga_id,local_carga_id,vendedor_id,produto_id,quantidade_pacotes,?,?,?,?,?,? FROM estoque_pacote_operacoes WHERE id=? AND status='CONFIRMADA' AND tipo<>'ESTORNO'`)
+    .bind(observacao||null,chave,hash,operacaoId,user.vendedorId,data,operacaoId)];
+  for(const m of movimentos.results||[])statements.push(movimentoPacoteStmt(env,chave,m.bucket,Number(m.quantidade_pacotes),-Number(m.efeito)));
+  statements.push(confirmarPacoteStmt(env,chave),sentinelaPacoteStmt(env,chave)); return executarPacoteIdempotente(env,chave,chaveCliente,hash,statements);
+}
+
+async function listarOperacoesPacote(request,env,user){
+  if(!usuarioTemRole(user,"admin","operacao"))return acessoNegado(); const u=new URL(request.url),f=[],p=[];
+  const cliente=inteiroQueryOpcional(u,"cliente_id"),avulso=inteiroQueryOpcional(u,"cliente_avulso_id");
+  if(cliente.erro||avulso.erro)return json({error:"cliente_id e cliente_avulso_id devem ser inteiros positivos."},400);
+  if(cliente.presente&&avulso.presente)return json({error:"Informe cliente_id ou cliente_avulso_id, nunca ambos."},400);
+  for(const [n,c] of [["vendedor_id","o.vendedor_id"],["produto_id","o.produto_id"]]){const q=inteiroQueryOpcional(u,n);if(q.erro)return json({error:`${n} deve ser inteiro positivo.`},400);if(q.presente){f.push(`${c}=?`);p.push(q.valor);}}
+  if(cliente.presente){f.push("o.cliente_id=?");p.push(cliente.valor);}if(avulso.presente){f.push("o.cliente_avulso_id=?");p.push(avulso.valor);}
+  for(const [n,c] of [["tipo","o.tipo"],["status","o.status"]]){const v=normalizeText(u.searchParams.get(n)).toUpperCase();if(v){f.push(`${c}=?`);p.push(v);}}
+  for(const [n,c,op] of [["data_inicial","o.data_operacao",">="],["data_final","o.data_operacao","<="]]){const v=normalizeText(u.searchParams.get(n));if(v){if(!dataOperacionalValida(v))return json({error:"Data inválida."},400);f.push(`${c}${op}?`);p.push(v);}}
+  const limiteQ=inteiroQueryOpcional(u,"limite",1,100),paginaQ=inteiroQueryOpcional(u,"pagina");
+  if(limiteQ.erro||paginaQ.erro)return json({error:"pagina deve ser positiva e limite deve estar entre 1 e 100."},400);
+  const limite=limiteQ.presente?limiteQ.valor:50,pagina=paginaQ.presente?paginaQ.valor:1;
+  const r=await env.DB.prepare(`SELECT o.id,o.tipo,o.status,o.carga_id,o.local_carga_id,o.vendedor_id,v.nome vendedor_nome,o.produto_id,pr.nome produto_nome,o.quantidade_pacotes,o.visita_id,o.cliente_id,o.cliente_avulso_id,o.motivo,o.observacao,o.operacao_estornada_id,o.usuario_id,o.data_operacao,o.created_at,o.confirmado_em,o.estornada_em FROM estoque_pacote_operacoes o JOIN vendedores v ON v.id=o.vendedor_id JOIN produtos pr ON pr.id=o.produto_id ${f.length?`WHERE ${f.join(" AND ")}`:""} ORDER BY o.id DESC LIMIT ? OFFSET ?`).bind(...p,limite,(pagina-1)*limite).all();
+  return json({pagina,limite,operacoes:r.results||[]});
+}
+
+async function detalheOperacaoPacote(env,user,id){if(!usuarioTemRole(user,"admin","operacao"))return acessoNegado();id=inteiroPositivo(id);const op=await env.DB.prepare("SELECT chave_idempotencia FROM estoque_pacote_operacoes WHERE id=?").bind(id).first();if(!op)return json({error:"Operação não encontrada."},404);return json({operacao:semHashes(await operacaoPacotePorChave(env,op.chave_idempotencia))});}
+
+async function descartesPendentes(request,env,user){
+  if(!usuarioTemRole(user,"admin","operacao"))return acessoNegado();const u=new URL(request.url),f=["o.status IN('CONFIRMADA','ESTORNADA')","m.bucket='DESCARTE_PENDENTE'"],p=[];
+  for(const[n,c]of [["local_carga_id","m.local_carga_id"],["vendedor_id","l.vendedor_id"],["produto_id","m.produto_id"]]){const q=inteiroQueryOpcional(u,n);if(q.erro)return json({error:`${n} deve ser inteiro positivo.`},400);if(q.presente){f.push(`${c}=?`);p.push(q.valor);}}
+  const r=await env.DB.prepare(`SELECT m.local_carga_id,MAX(l.vendedor_id) vendedor_id,m.produto_id,p.nome produto_nome,SUM(m.quantidade_pacotes*m.efeito) saldo FROM estoque_pacote_movimentacoes m JOIN estoque_pacote_operacoes o ON o.id=m.operacao_id JOIN produtos p ON p.id=m.produto_id JOIN estoque_locais l ON l.id=m.local_carga_id WHERE ${f.join(" AND ")} GROUP BY m.local_carga_id,m.produto_id,m.bucket HAVING SUM(m.quantidade_pacotes*m.efeito)>0 ORDER BY m.local_carga_id,m.produto_id`).bind(...p).all();return json({descartes:r.results||[]});
+}
+
+async function bonusFardoPorId(env,id){return env.DB.prepare(`SELECT id,status,carga_id,local_carga_id,visita_id,cliente_id,cliente_avulso_id,produto_id,quantidade_fardos,vendedor_id,solicitado_por,motivo,chave_idempotencia,idempotencia_hash,solicitada_em,decidido_por,decidida_em,motivo_decisao,chave_decisao,idempotencia_hash_decisao,entregue_por,entregue_em,chave_entrega,idempotencia_hash_entrega,estoque_operacao_fardo_id,cancelada_por,cancelada_em,chave_cancelamento,idempotencia_hash_cancelamento,motivo_cancelamento,updated_at FROM bonificacao_fardo_solicitacoes WHERE id=?`).bind(id).first();}
+
+async function bonusFardoPorChave(env,coluna,chave){
+  const permitidas=new Set(["chave_idempotencia","chave_decisao","chave_cancelamento","chave_entrega"]);
+  if(!permitidas.has(coluna))throw new Error("Coluna de idempotência inválida.");
+  const registro=await env.DB.prepare(`SELECT id FROM bonificacao_fardo_solicitacoes WHERE ${coluna}=?`).bind(chave).first();
+  return registro?bonusFardoPorId(env,registro.id):null;
+}
+
+async function finalizarBonusFardoBatch({env,resultados,quantidadeResultados,retornos={},carregar,compativel,chaveCliente}){
+  const batchValido=resultadosBatchValidos(resultados,quantidadeResultados,retornos);
+  let solicitacao;
+  try{solicitacao=await carregar();}catch{return respostaIndeterminadaIdempotencia(chaveCliente);}
+  if(!solicitacao)return respostaIndeterminadaIdempotencia(chaveCliente);
+  if(!compativel(solicitacao))return respostaConflitoIdempotencia(chaveCliente,
+    "A operação foi encontrada em estado ou conteúdo divergente.");
+  if(!batchValido)return json({success:true,idempotente:true,solicitacao:semHashes(solicitacao)});
+  return json({success:true,idempotente:false,solicitacao:semHashes(solicitacao)},201);
+}
+
+async function carregarEntregaBonusFardoCompleta(env,solicitacaoId){
+  return env.DB.prepare(`SELECT b.*,
+    eo.id AS estoque_operacao_id,eo.tipo AS estoque_operacao_tipo,eo.status AS estoque_operacao_status,
+    eo.origem_tipo AS estoque_origem_tipo,eo.origem_id AS estoque_origem_id,
+    eo.chave_idempotencia AS estoque_chave_idempotencia,eo.usuario_id AS estoque_usuario_id,
+    (SELECT COUNT(*) FROM estoque_movimentacoes em WHERE em.operacao_id=eo.id) AS movimento_total,
+    (SELECT em.id FROM estoque_movimentacoes em WHERE em.operacao_id=eo.id ORDER BY em.id LIMIT 1) AS movimento_id,
+    (SELECT em.operacao_id FROM estoque_movimentacoes em WHERE em.operacao_id=eo.id ORDER BY em.id LIMIT 1) AS movimento_operacao_id,
+    (SELECT em.carga_id FROM estoque_movimentacoes em WHERE em.operacao_id=eo.id ORDER BY em.id LIMIT 1) AS movimento_carga_id,
+    (SELECT em.local_id FROM estoque_movimentacoes em WHERE em.operacao_id=eo.id ORDER BY em.id LIMIT 1) AS movimento_local_id,
+    (SELECT em.produto_id FROM estoque_movimentacoes em WHERE em.operacao_id=eo.id ORDER BY em.id LIMIT 1) AS movimento_produto_id,
+    (SELECT em.quantidade FROM estoque_movimentacoes em WHERE em.operacao_id=eo.id ORDER BY em.id LIMIT 1) AS movimento_quantidade,
+    (SELECT em.efeito FROM estoque_movimentacoes em WHERE em.operacao_id=eo.id ORDER BY em.id LIMIT 1) AS movimento_efeito,
+    (SELECT COUNT(*) FROM estoque_movimentacoes em JOIN estoque_carga_itens ci ON ci.id=em.carga_item_id
+      WHERE em.operacao_id=eo.id AND ci.carga_id=b.carga_id AND ci.produto_id=b.produto_id) AS movimento_item_coerente
+    FROM bonificacao_fardo_solicitacoes b
+    LEFT JOIN estoque_operacoes eo ON eo.id=b.estoque_operacao_fardo_id
+    WHERE b.id=?`).bind(solicitacaoId).first();
+}
+
+function validarEntregaBonusFardoCompleta(registro,{chaveEntrega,hashEntrega,chaveEstoque,vendedorId}){
+  if(!registro)return {tipo:"AUSENTE"};
+  if(registro.status!=="ENTREGUE")return {tipo:"NAO_CONFIRMADA"};
+  if(registro.chave_entrega!==chaveEntrega||registro.idempotencia_hash_entrega!==hashEntrega){
+    return {tipo:"DIVERGENTE"};
+  }
+  const inteiraPositiva=valor=>Number.isSafeInteger(Number(valor))&&Number(valor)>0;
+  const solicitacaoValida=Number(registro.entregue_por)===vendedorId&&!!registro.entregue_em
+    &&inteiraPositiva(registro.estoque_operacao_fardo_id);
+  const operacaoValida=inteiraPositiva(registro.estoque_operacao_id)
+    &&Number(registro.estoque_operacao_id)===Number(registro.estoque_operacao_fardo_id)
+    &&registro.estoque_operacao_tipo==="BONIFICACAO_FARDO"&&registro.estoque_operacao_status==="CONFIRMADA"
+    &&registro.estoque_origem_tipo==="CARGA"&&Number(registro.estoque_origem_id)===Number(registro.carga_id)
+    &&registro.estoque_chave_idempotencia===chaveEstoque&&Number(registro.estoque_usuario_id)===vendedorId;
+  const movimentoValido=Number(registro.movimento_total)===1&&inteiraPositiva(registro.movimento_id)
+    &&Number(registro.movimento_operacao_id)===Number(registro.estoque_operacao_id)
+    &&Number(registro.movimento_carga_id)===Number(registro.carga_id)
+    &&Number(registro.movimento_local_id)===Number(registro.local_carga_id)
+    &&Number(registro.movimento_produto_id)===Number(registro.produto_id)
+    &&Number(registro.movimento_quantidade)===1&&Number(registro.movimento_efeito)===-1
+    &&Number(registro.movimento_item_coerente)===1;
+  return solicitacaoValida&&operacaoValida&&movimentoValido?{tipo:"COMPLETA"}:{tipo:"INCONSISTENTE"};
+}
+
+function solicitacaoEntregaPublica(registro){
+  const copia=semHashes(registro);
+  for(const chave of Object.keys(copia)){
+    if((chave.startsWith("estoque_")&&chave!=="estoque_operacao_fardo_id")||chave.startsWith("movimento_"))delete copia[chave];
+  }
+  return copia;
+}
+
+function respostaEntregaInconsistente(chaveCliente){
+  return json({error:"A entrega está registrada com baixa de estoque incompleta ou divergente.",
+    codigo:"ENTREGA_ESTOQUE_INCONSISTENTE",chave_idempotencia:chaveCliente},409);
+}
+
+async function finalizarEntregaBonusFardo({env,id,resultados,quantidadeResultados,retornos,chaveCliente,
+  chaveEntrega,hashEntrega,chaveEstoque,vendedorId}){
+  const batchValido=resultadosBatchValidos(resultados,quantidadeResultados,retornos);
+  let entrega;
+  try{entrega=await carregarEntregaBonusFardoCompleta(env,id);}catch{return respostaIndeterminadaIdempotencia(chaveCliente);}
+  const validacao=validarEntregaBonusFardoCompleta(entrega,{chaveEntrega,hashEntrega,chaveEstoque,vendedorId});
+  if(validacao.tipo==="DIVERGENTE")return respostaConflitoIdempotencia(chaveCliente,"Entrega encontrada com chave ou conteúdo divergente.");
+  if(validacao.tipo==="INCONSISTENTE")return respostaEntregaInconsistente(chaveCliente);
+  if(validacao.tipo!=="COMPLETA")return respostaIndeterminadaIdempotencia(chaveCliente);
+  return json({success:true,idempotente:!batchValido,solicitacao:solicitacaoEntregaPublica(entrega)},batchValido?201:200);
+}
+
+async function solicitarBonusFardo(request,env,user,visitaId){
+  if(!usuarioTemRole(user,"vendedor"))return acessoNegado(); visitaId=inteiroPositivo(visitaId);
+  const d=await request.json(),produtoId=inteiroPositivo(d.produto_id),quantidade=inteiroPositivo(d.quantidade_fardos),motivo=normalizeText(d.motivo).toUpperCase(),observacao=normalizeText(d.observacao),chaveCliente=validarChavePacote(d.chave_idempotencia);
+  if(!visitaId||!produtoId||!quantidade||!chaveCliente||!MOTIVOS_BONIFICACAO.has(motivo)||(motivo==="OUTRO"&&!observacao))return json({error:"Dados da solicitação inválidos."},400);
+  const chave=`BONIFICACAO_FARDO:SOLICITACAO:${chaveCliente}`,motivoCompleto=motivo==="OUTRO"?`OUTRO: ${observacao}`:motivo;
+  let existente=await env.DB.prepare("SELECT id,carga_id,idempotencia_hash FROM bonificacao_fardo_solicitacoes WHERE chave_idempotencia=?").bind(chave).first();
+  if(existente){
+    const hash=await hashTexto(JSON.stringify({vendedor_id:user.vendedorId,carga_id:Number(existente.carga_id),visita_id:visitaId,produto_id:produtoId,quantidade,motivo,observacao}));
+    if(existente.idempotencia_hash!==hash)return respostaConflitoIdempotencia(chaveCliente,"Chave usada com conteúdo diferente.");
+    let completa;try{completa=await bonusFardoPorId(env,existente.id);}catch{return respostaIndeterminadaIdempotencia(chaveCliente);}
+    return completa?.status==="PENDENTE"&&completa.idempotencia_hash===hash
+      ?json({success:true,idempotente:true,solicitacao:semHashes(completa)})
+      :respostaConflitoIdempotencia(chaveCliente,"Solicitação encontrada em estado divergente.");
+  }
+  const visita=await env.DB.prepare("SELECT id,cliente_id,cliente_avulso_id,status_registro FROM visitas WHERE id=? AND vendedor_id=?").bind(visitaId,user.vendedorId).first(); if(!visita)return json({error:"Visita própria não encontrada."},403);
+  if(visita.status_registro!=="ATIVA")return respostaConflitoIdempotencia(chaveCliente,"A visita não está ativa para receber a solicitação.");
+  const carga=await cargaAbertaDoVendedor(env,user.vendedorId);if(!carga)return respostaConflitoIdempotencia(chaveCliente,"Vendedor sem carga aberta.");
+  if(!await env.DB.prepare("SELECT id FROM estoque_carga_itens WHERE carga_id=? AND produto_id=?").bind(carga.id,produtoId).first())return respostaConflitoIdempotencia(chaveCliente,"Produto não pertence à carga.");
+  const hash=await hashTexto(JSON.stringify({vendedor_id:user.vendedorId,carga_id:carga.id,visita_id:visitaId,produto_id:produtoId,quantidade,motivo,observacao}));
+  const statements=[env.DB.prepare(`INSERT INTO bonificacao_fardo_solicitacoes(status,carga_id,local_carga_id,visita_id,cliente_id,cliente_avulso_id,produto_id,quantidade_fardos,vendedor_id,solicitado_por,motivo,chave_idempotencia,idempotencia_hash)
+      SELECT 'PENDENTE',c.id,c.local_carga_id,v.id,v.cliente_id,v.cliente_avulso_id,p.id,?,c.vendedor_id,?,?,?,?
+      FROM estoque_cargas c JOIN estoque_carga_itens ci ON ci.carga_id=c.id AND ci.produto_id=?
+      JOIN produtos p ON p.id=ci.produto_id AND p.ativo='ativo'
+      JOIN visitas v ON v.id=? AND v.vendedor_id=c.vendedor_id AND v.status_registro='ATIVA'
+        AND COALESCE(v.cliente_id,0)=? AND COALESCE(v.cliente_avulso_id,0)=?
+      WHERE c.id=? AND c.status='ABERTA' AND c.vendedor_id=? AND c.local_carga_id=? RETURNING id`)
+      .bind(quantidade,user.vendedorId,motivoCompleto,chave,hash,produtoId,visitaId,visita.cliente_id||0,visita.cliente_avulso_id||0,carga.id,user.vendedorId,carga.local_carga_id)];
+  let resultados;
+  try{resultados=await env.DB.batch(statements);}catch{resultados=null;}
+  const resposta=await finalizarBonusFardoBatch({env,resultados,quantidadeResultados:statements.length,
+    retornos:{0:{linhas:1,idInteiroPositivo:true}},carregar:()=>bonusFardoPorChave(env,"chave_idempotencia",chave),
+    compativel:s=>s.status==="PENDENTE"&&s.idempotencia_hash===hash,chaveCliente});
+  if(resposta.status===503&&resultados?.[0]?.success===true&&Array.isArray(resultados[0].results)&&resultados[0].results.length===0){
+    return respostaConflitoIdempotencia(chaveCliente,"O estado da carga, visita ou produto mudou antes da gravação.");
+  }
+  return resposta;
+}
+
+async function decidirBonusFardo(request,env,user,id,status){
+  if(!usuarioTemRole(user,"admin"))return acessoNegado();id=inteiroPositivo(id);const d=await request.json(),chaveCliente=validarChavePacote(d.chave_idempotencia),motivo=normalizeText(d.motivo);
+  if(!id||!chaveCliente||(status==="REJEITADA"&&!motivo))return json({error:"Dados da decisão inválidos."},400);
+  const chave=`BONIFICACAO_FARDO:${status}:${chaveCliente}`,hash=await hashTexto(JSON.stringify({id,status,motivo,usuario_id:user.vendedorId}));let atual=await bonusFardoPorId(env,id);if(!atual)return json({error:"Solicitação não encontrada."},404);
+  const compativel=s=>s.status===status&&s.chave_decisao===chave&&s.idempotencia_hash_decisao===hash
+    &&Number(s.decidido_por)===user.vendedorId&&!!s.decidida_em
+    &&(status==="APROVADA"?!s.motivo_decisao:s.motivo_decisao===motivo);
+  if(atual.status===status)return compativel(atual)?json({success:true,idempotente:true,solicitacao:semHashes(atual)}):respostaConflitoIdempotencia(chaveCliente,"Solicitação já decidida com dados diferentes.");
+  const statements=[env.DB.prepare(`UPDATE bonificacao_fardo_solicitacoes SET status=?,decidido_por=?,decidida_em=CURRENT_TIMESTAMP,motivo_decisao=?,chave_decisao=?,idempotencia_hash_decisao=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='PENDENTE'`).bind(status,user.vendedorId,status==="REJEITADA"?motivo:null,chave,hash,id),env.DB.prepare(`INSERT INTO bonificacao_fardo_solicitacoes(status,carga_id,local_carga_id,visita_id,produto_id,quantidade_fardos,vendedor_id,solicitado_por,motivo,chave_idempotencia,idempotencia_hash) SELECT 'INVALIDA',0,0,0,0,0,0,0,'x','x','x' WHERE NOT EXISTS(SELECT 1 FROM bonificacao_fardo_solicitacoes WHERE id=? AND status=? AND chave_decisao=? AND idempotencia_hash_decisao=?)`).bind(id,status,chave,hash)];
+  let resultados;try{resultados=await env.DB.batch(statements);}catch{resultados=null;}
+  return finalizarBonusFardoBatch({env,resultados,quantidadeResultados:statements.length,carregar:()=>bonusFardoPorId(env,id),
+    compativel,chaveCliente});
+}
+
+async function cancelarBonusFardo(request,env,user,id){
+  if(!usuarioTemRole(user,"admin","vendedor"))return acessoNegado();id=inteiroPositivo(id);const d=await request.json(),chaveCliente=validarChavePacote(d.chave_idempotencia),motivo=normalizeText(d.motivo);
+  if(!id||!chaveCliente||!motivo||motivo.length>500)return json({error:"Chave e motivo de cancelamento válidos são obrigatórios."},400);
+  const chaveInterna=`BONIFICACAO_FARDO:CANCELAMENTO:${chaveCliente}`,hash=await hashTexto(JSON.stringify({id,motivo,usuario_id:user.vendedorId}));let atual=await bonusFardoPorId(env,id);if(!atual)return json({error:"Solicitação não encontrada."},404);
+  if(user.role==="vendedor"&&Number(atual.vendedor_id)!==user.vendedorId)return acessoNegado();
+  const compativel=s=>s.status==="CANCELADA"&&s.chave_cancelamento===chaveInterna
+    &&s.idempotencia_hash_cancelamento===hash&&Number(s.cancelada_por)===user.vendedorId
+    &&!!s.cancelada_em&&s.motivo_cancelamento===motivo;
+  if(atual.status==="CANCELADA")return compativel(atual)?json({success:true,idempotente:true,solicitacao:semHashes(atual)}):respostaConflitoIdempotencia(chaveCliente,"Cancelamento já realizado com dados diferentes.");
+  const statements=[env.DB.prepare("UPDATE bonificacao_fardo_solicitacoes SET status='CANCELADA',cancelada_por=?,cancelada_em=CURRENT_TIMESTAMP,chave_cancelamento=?,idempotencia_hash_cancelamento=?,motivo_cancelamento=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='PENDENTE'").bind(user.vendedorId,chaveInterna,hash,motivo,id),env.DB.prepare(`INSERT INTO bonificacao_fardo_solicitacoes(status,carga_id,local_carga_id,visita_id,produto_id,quantidade_fardos,vendedor_id,solicitado_por,motivo,chave_idempotencia,idempotencia_hash) SELECT 'INVALIDA',0,0,0,0,0,0,0,'x','x','x' WHERE NOT EXISTS(SELECT 1 FROM bonificacao_fardo_solicitacoes WHERE id=? AND status='CANCELADA' AND chave_cancelamento=? AND idempotencia_hash_cancelamento=?)`).bind(id,chaveInterna,hash)];
+  let resultados;try{resultados=await env.DB.batch(statements);}catch{resultados=null;}
+  return finalizarBonusFardoBatch({env,resultados,quantidadeResultados:statements.length,carregar:()=>bonusFardoPorId(env,id),
+    compativel,chaveCliente});
+}
+
+async function entregarBonusFardo(request,env,user,id){
+  if(!usuarioTemRole(user,"vendedor"))return acessoNegado();id=inteiroPositivo(id);const d=await request.json(),chaveCliente=validarChavePacote(d.chave_idempotencia),data=normalizeText(d.data_operacao||obterDataLocalCuiaba());if(!id||!chaveCliente||!dataOperacionalValida(data))return json({error:"Dados de entrega inválidos."},400);
+  let s=await bonusFardoPorId(env,id);if(!s)return json({error:"Solicitação não encontrada."},404);if(Number(s.vendedor_id)!==user.vendedorId)return acessoNegado();const chave=`BONIFICACAO_FARDO:ENTREGA:${chaveCliente}`,hash=await hashTexto(JSON.stringify({id,data,vendedor_id:user.vendedorId}));
+  const chaveEstoque=`BONIFICACAO_FARDO:${chaveCliente}`;
+  if(s.status==="ENTREGUE")return finalizarEntregaBonusFardo({env,id,resultados:null,quantidadeResultados:0,retornos:{},
+    chaveCliente,chaveEntrega:chave,hashEntrega:hash,chaveEstoque,vendedorId:user.vendedorId});
+  if(s.status!=="APROVADA")return respostaConflitoIdempotencia(chaveCliente,"Somente solicitação APROVADA pode ser entregue.");
+  if(Number(s.quantidade_fardos)!==1)return respostaConflitoIdempotencia(chaveCliente,"A entrega individual exige exatamente um fardo.");
+  const st=[env.DB.prepare(`INSERT INTO estoque_operacoes(tipo,status,data_operacao,origem_tipo,origem_id,chave_idempotencia,usuario_id,observacao,created_at) SELECT 'BONIFICACAO_FARDO','CONFIRMADA',?,'CARGA',c.id,?,?,?,CURRENT_TIMESTAMP FROM bonificacao_fardo_solicitacoes b JOIN estoque_cargas c ON c.id=b.carga_id JOIN estoque_carga_itens ci ON ci.carga_id=c.id AND ci.produto_id=b.produto_id JOIN produtos p ON p.id=ci.produto_id AND p.ativo='ativo' WHERE b.id=? AND b.status='APROVADA' AND b.quantidade_fardos=1 AND c.status='ABERTA' AND c.vendedor_id=b.vendedor_id AND c.local_carga_id=b.local_carga_id AND (SELECT COALESCE(SUM(quantidade*efeito),0) FROM estoque_movimentacoes WHERE local_id=b.local_carga_id AND produto_id=b.produto_id)>=b.quantidade_fardos RETURNING id`).bind(data,chaveEstoque,user.vendedorId,`Entrega da bonificação #${id}`,id),env.DB.prepare(`INSERT INTO estoque_movimentacoes(operacao_id,local_id,produto_id,carga_id,carga_item_id,quantidade,efeito,created_at) SELECT o.id,b.local_carga_id,b.produto_id,b.carga_id,ci.id,b.quantidade_fardos,-1,CURRENT_TIMESTAMP FROM bonificacao_fardo_solicitacoes b JOIN estoque_operacoes o ON o.chave_idempotencia=? JOIN estoque_carga_itens ci ON ci.carga_id=b.carga_id AND ci.produto_id=b.produto_id JOIN produtos p ON p.id=ci.produto_id AND p.ativo='ativo' WHERE b.id=? AND b.status='APROVADA' RETURNING id`).bind(chaveEstoque,id),env.DB.prepare(`UPDATE bonificacao_fardo_solicitacoes SET status='ENTREGUE',entregue_por=?,entregue_em=CURRENT_TIMESTAMP,chave_entrega=?,idempotencia_hash_entrega=?,estoque_operacao_fardo_id=(SELECT id FROM estoque_operacoes WHERE chave_idempotencia=?),updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='APROVADA' RETURNING id`).bind(user.vendedorId,chave,hash,chaveEstoque,id),env.DB.prepare(`INSERT INTO estoque_movimentacoes(operacao_id,local_id,produto_id,quantidade,efeito) SELECT 0,0,0,0,0 WHERE NOT EXISTS(SELECT 1 FROM bonificacao_fardo_solicitacoes WHERE id=? AND status='ENTREGUE' AND chave_entrega=?)`).bind(id,chave)];
+  let resultados;try{resultados=await env.DB.batch(st);}catch{resultados=null;}
+  return finalizarEntregaBonusFardo({env,id,resultados,quantidadeResultados:st.length,
+    retornos:{0:{linhas:1,idInteiroPositivo:true},1:{linhas:1,idInteiroPositivo:true},2:{linhas:1,idInteiroPositivo:true}},
+    chaveCliente,chaveEntrega:chave,hashEntrega:hash,chaveEstoque,vendedorId:user.vendedorId});
+}
+
+async function listarBonusFardo(request,env,user){if(!usuarioTemRole(user,"admin"))return acessoNegado();const u=new URL(request.url),status=normalizeText(u.searchParams.get("status")).toUpperCase(),limiteQ=inteiroQueryOpcional(u,"limite",1,100);if(limiteQ.erro)return json({error:"limite deve estar entre 1 e 100."},400);const limite=limiteQ.presente?limiteQ.valor:50;const r=await env.DB.prepare(`SELECT b.id,b.status,b.carga_id,b.visita_id,b.produto_id,p.nome produto_nome,b.quantidade_fardos,b.vendedor_id,v.nome vendedor_nome,b.motivo,b.solicitada_em,b.decidida_em,b.entregue_em,b.cancelada_em,b.motivo_cancelamento FROM bonificacao_fardo_solicitacoes b JOIN produtos p ON p.id=b.produto_id JOIN vendedores v ON v.id=b.vendedor_id WHERE (?='' OR b.status=?) ORDER BY b.id DESC LIMIT ?`).bind(status,status,limite).all();return json({solicitacoes:r.results||[]});}
 
 async function listarVendedores(env, user) {
   if (user.role !== "admin") {
@@ -4437,6 +4960,24 @@ if (url.pathname === "/api/sync" && request.method === "POST") {
     if (url.pathname === "/api/estoque/entradas" && request.method === "POST") return registrarEntradaEstoque(request, env, user);
     if (url.pathname === "/api/estoque/ajustes" && request.method === "POST") return registrarAjusteEstoque(request, env, user);
     if (url.pathname === "/api/estoque/disponibilidade" && request.method === "GET") return consultarDisponibilidadeEstoqueCentral(request, env, user);
+    if (url.pathname === "/api/minha-carga" && request.method === "GET") return minhaCarga(env, user);
+    if (url.pathname === "/api/minha-carga/saldo-pacotes" && request.method === "GET") return saldoPacotes(request, env, user, true);
+    if (/^\/api\/minha-carga\/fardos\/\d+\/abertura$/.test(url.pathname) && request.method === "POST") return abrirFardoPacote(request, env, user, Number(url.pathname.split("/")[4]));
+    if (/^\/api\/visitas\/\d+\/trocas$/.test(url.pathname) && request.method === "POST") return operacaoComercialPacote(request, env, user, Number(url.pathname.split("/")[3]), "TROCA");
+    if (/^\/api\/visitas\/\d+\/degustacoes$/.test(url.pathname) && request.method === "POST") return operacaoComercialPacote(request, env, user, Number(url.pathname.split("/")[3]), "DEGUSTACAO");
+    if (/^\/api\/visitas\/\d+\/bonificacoes-pacote$/.test(url.pathname) && request.method === "POST") return operacaoComercialPacote(request, env, user, Number(url.pathname.split("/")[3]), "BONIFICACAO_PACOTE");
+    if (/^\/api\/visitas\/\d+\/bonificacoes-fardo\/solicitacoes$/.test(url.pathname) && request.method === "POST") return solicitarBonusFardo(request, env, user, Number(url.pathname.split("/")[3]));
+    if (/^\/api\/bonificacoes-fardo\/\d+\/cancelamento$/.test(url.pathname) && request.method === "POST") return cancelarBonusFardo(request, env, user, Number(url.pathname.split("/")[3]));
+    if (/^\/api\/bonificacoes-fardo\/\d+\/entrega$/.test(url.pathname) && request.method === "POST") return entregarBonusFardo(request, env, user, Number(url.pathname.split("/")[3]));
+    if (url.pathname === "/api/admin/bonificacoes-fardo" && request.method === "GET") return listarBonusFardo(request, env, user);
+    if (/^\/api\/admin\/bonificacoes-fardo\/\d+\/aprovacao$/.test(url.pathname) && request.method === "POST") return decidirBonusFardo(request, env, user, Number(url.pathname.split("/")[4]), "APROVADA");
+    if (/^\/api\/admin\/bonificacoes-fardo\/\d+\/rejeicao$/.test(url.pathname) && request.method === "POST") return decidirBonusFardo(request, env, user, Number(url.pathname.split("/")[4]), "REJEITADA");
+    if (url.pathname === "/api/estoque/operacoes-pacote" && request.method === "GET") return listarOperacoesPacote(request, env, user);
+    if (/^\/api\/estoque\/operacoes-pacote\/\d+$/.test(url.pathname) && request.method === "GET") return detalheOperacaoPacote(env, user, Number(url.pathname.split("/").pop()));
+    if (url.pathname === "/api/estoque/saldos-pacote" && request.method === "GET") return saldoPacotes(request, env, user, false);
+    if (url.pathname === "/api/estoque/descartes-pendentes" && request.method === "GET") return descartesPendentes(request, env, user);
+    if (url.pathname === "/api/estoque/descartes/confirmacoes" && request.method === "POST") return confirmarDescartePacote(request, env, user);
+    if (/^\/api\/estoque\/operacoes-pacote\/\d+\/estorno$/.test(url.pathname) && request.method === "POST") return estornarOperacaoPacote(request, env, user, Number(url.pathname.split("/")[4]));
     if (url.pathname === "/api/estoque/cargas/vendedores" && request.method === "GET") return listarVendedoresCarga(env, user);
     if (url.pathname === "/api/estoque/cargas" && request.method === "POST") return registrarCargaVendedor(request, env, user);
     if (url.pathname === "/api/estoque/cargas" && request.method === "GET") return listarCargasVendedor(request, env, user);
