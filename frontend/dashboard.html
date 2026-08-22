@@ -77,6 +77,13 @@
         <span class="badge ok">Disponível</span>
       </a>
 
+      <a class="card vendedor-only" href="minha-carga-pacotes.html">
+        <div class="icon">📦</div>
+        <div class="title">Minha carga e pacotes</div>
+        <div class="desc">Consultar fardos fechados, pacotes disponíveis, descarte pendente e bonificações.</div>
+        <span class="badge ok">Disponível</span>
+      </a>
+
       <a class="card" href="relatorio-dia.html">
         <div class="icon">📊</div>
         <div class="title">Relatório do Dia</div>
@@ -160,6 +167,10 @@ document.getElementById("perfilUsuario").textContent = role || "vendedor";
 
 if(role !== "admin"){
   document.querySelectorAll(".admin-only").forEach(el => el.style.display = "none");
+}
+
+if(role !== "vendedor"){
+  document.querySelectorAll(".vendedor-only").forEach(el => el.style.display = "none");
 }
 
 if(role !== "admin" && role !== "operacao"){

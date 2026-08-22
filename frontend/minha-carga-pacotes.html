@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#e9a900">
+  <link rel="apple-touch-icon" href="images/icon-192.png">
+  <title>Gestão Vovó Maria · Minha carga e pacotes</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    html,body{max-width:100%;overflow-x:hidden}
+    body{font-family:'Segoe UI',system-ui,sans-serif;background:linear-gradient(145deg,#fff7ed,#ffefe0);color:#432818;padding:16px;min-height:100vh}
+    .wrap{width:100%;max-width:1080px;margin:auto}
+    .top,.panel{background:#fff;border-radius:24px;padding:20px;box-shadow:0 12px 28px rgba(67,40,24,.09);margin-bottom:16px}
+    .brand{display:flex;align-items:center;gap:14px}.logo{width:76px;height:76px;object-fit:contain}
+    h1{font-size:25px;color:#78350f}h2{font-size:19px;color:#78350f;margin-bottom:12px}.sub{color:#9a3412;margin-top:4px;line-height:1.4}
+    .user{margin-top:13px;color:#7c2d12;font-size:13px}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+    .button{border:0;border-radius:999px;padding:12px 18px;font-weight:850;text-decoration:none;text-align:center;background:#e7e5e4;color:#44403c}
+    .status{padding:14px;border-radius:16px;margin-bottom:16px;background:#fef3c7;color:#92400e;font-weight:750;line-height:1.45}
+    .status.ok{background:#d1fae5;color:#065f46}.status.err{background:#fee2e2;color:#991b1b}
+    .carga-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+    .info{min-width:0;background:#fff7ed;border:1px solid #fed7aa;border-radius:18px;padding:15px}.info span{display:block;color:#9a3412;font-size:12px;font-weight:800;text-transform:uppercase}.info strong{display:block;margin-top:6px;font-size:18px;color:#78350f;overflow-wrap:anywhere;word-break:break-word}
+    .aviso{background:#fffbeb;border-left:5px solid #f59e0b;border-radius:16px;padding:14px;color:#78350f;line-height:1.5;margin-top:14px}.aviso strong{color:#9a3412}
+    .produto-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:14px}.produto{min-width:0;border:1px solid #fed7aa;border-radius:20px;padding:17px;background:#fff}.produto h3{font-size:18px;color:#78350f;margin-bottom:5px}.conversao{font-size:12px;color:#78716c;margin-bottom:13px}
+    .produto h3,.conversao,.saldo span,.saldo strong{overflow-wrap:anywhere;word-break:break-word}
+    .saldos{min-width:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.saldo{min-width:0;border-radius:15px;padding:12px 9px;min-height:88px}.saldo span{display:block;font-size:11px;font-weight:850;line-height:1.25}.saldo strong{display:block;font-size:23px;margin-top:7px}
+    .saldo.fardos{background:#ffedd5;color:#9a3412}.saldo.pacotes{background:#d1fae5;color:#065f46}.saldo.descarte{background:#fee2e2;color:#991b1b}
+    .solicitacoes{min-width:0;display:grid;gap:12px}.solicitacao{min-width:0;border:1px solid #f3e3d1;border-radius:18px;padding:15px;display:grid;grid-template-columns:1.4fr repeat(3,minmax(0,1fr));gap:12px;align-items:center}.solicitacao>div{min-width:0}.solicitacao,.solicitacao *{overflow-wrap:anywhere;word-break:break-word}
+    .rotulo{display:block;font-size:11px;text-transform:uppercase;font-weight:850;color:#9a3412;margin-bottom:4px}.tag{display:inline-block;border-radius:999px;padding:6px 10px;font-size:11px;font-weight:900}.tag.pendente{background:#fef3c7;color:#92400e}.tag.aprovada{background:#d1fae5;color:#065f46}
+    .empty{text-align:center;padding:28px 14px;color:#78716c;background:#fafaf9;border-radius:18px}.hidden{display:none!important}
+    @media(max-width:720px){body{padding:10px}.top,.panel{padding:16px;border-radius:20px}.brand{align-items:flex-start}.logo{width:62px;height:62px}.carga-grid{grid-template-columns:1fr}.solicitacao{grid-template-columns:1fr 1fr}.produto-grid{grid-template-columns:1fr}}
+    @media(max-width:430px){.brand{flex-direction:column;align-items:center;text-align:center}.logo{width:96px;height:96px}.actions>*{width:100%}.saldos{grid-template-columns:1fr}.saldo{min-height:auto}.solicitacao{grid-template-columns:1fr}h1{font-size:23px}}
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <section class="top">
+    <div class="brand">
+      <img src="images/logo-vm-gestao.png" class="logo" alt="Vovó Maria">
+      <div><h1>Minha carga e pacotes</h1><div class="sub">Consulta da carga aberta e dos saldos em pacotes no seu local</div></div>
+    </div>
+    <div class="user" id="userInfo"></div>
+    <div class="actions"><a class="button" href="dashboard.html">Voltar ao Dashboard</a></div>
+  </section>
+
+  <div id="status" class="status" role="status" aria-live="polite">Carregando sua carga...</div>
+
+  <section id="semCarga" class="panel hidden">
+    <h2>Nenhuma carga aberta</h2>
+    <p>Você não possui uma carga aberta neste momento. Quando uma carga for aberta para o seu usuário, os fardos, pacotes e solicitações aparecerão aqui.</p>
+  </section>
+
+  <div id="conteudoCarga" class="hidden">
+    <section class="panel">
+      <h2>Carga aberta</h2>
+      <div class="carga-grid">
+        <div class="info"><span>Identificação</span><strong id="cargaId">—</strong></div>
+        <div class="info"><span>Data da carga</span><strong id="cargaData">—</strong></div>
+        <div class="info"><span>Local</span><strong id="cargaLocal">—</strong></div>
+      </div>
+      <div class="aviso"><strong>Saldo do local:</strong> os pacotes fracionados pertencem ao local da sua carga e podem permanecer disponíveis entre cargas e dias diferentes.</div>
+    </section>
+
+    <section class="panel">
+      <h2>Produtos e saldos</h2>
+      <p class="sub" style="margin-bottom:14px">Produtos da carga atual e produtos que ainda possuem saldo residual no mesmo local.</p>
+      <div id="produtos" class="produto-grid"></div>
+      <div id="produtosVazio" class="empty hidden">Nenhum produto ou saldo em pacote foi encontrado para este local.</div>
+      <div class="aviso"><strong>Importante:</strong> descarte pendente fica separado e nunca é somado aos pacotes disponíveis.</div>
+    </section>
+
+    <section class="panel">
+      <h2>Solicitações de bonificação em fardo</h2>
+      <p class="sub" style="margin-bottom:14px">Solicitações pendentes e aprovadas vinculadas à carga aberta.</p>
+      <div id="solicitacoes" class="solicitacoes"></div>
+      <div id="solicitacoesVazio" class="empty hidden">Nenhuma solicitação pendente ou aprovada nesta carga.</div>
+    </section>
+
+    <section class="panel">
+      <h2>Como estes registros são tratados</h2>
+      <div class="aviso" style="margin-top:0">Troca, degustação e bonificação são operações separadas da venda e não geram comissão.</div>
+    </section>
+  </div>
+</main>
+
+<script>
+const API_BASE="https://gestaovomaria-api.odir-bene12.workers.dev";
+const token=localStorage.getItem("token");
+const role=localStorage.getItem("vendedorRole")||"";
+const nome=localStorage.getItem("vendedorNome")||"Usuário";
+
+if(!token){
+  location.href="login.html";
+}else if(role!=="vendedor"){
+  alert("Acesso permitido somente para vendedores.");
+  location.href="dashboard.html";
+}
+
+document.getElementById("userInfo").textContent=`${nome} · Vendedor`;
+
+function escapar(valor){return String(valor??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+function numero(valor){
+  if(valor===null||valor===undefined)return"—";
+  if(typeof valor==="string"&&!valor.trim())return"—";
+  const n=Number(valor);
+  return Number.isFinite(n)?n.toLocaleString("pt-BR",{maximumFractionDigits:3}):"—";
+}
+function dataBR(valor,comHora=false){
+  if(!valor)return"—";
+  const texto=String(valor);
+  if(!comHora){const partes=texto.slice(0,10).split("-");return partes.length===3?`${partes[2]}/${partes[1]}/${partes[0]}`:texto}
+  const data=new Date(texto.includes("T")?texto:`${texto.replace(" ","T")}Z`);
+  return Number.isNaN(data.getTime())?texto:data.toLocaleString("pt-BR",{timeZone:"America/Cuiaba"});
+}
+function textoMotivo(valor){return String(valor||"Não informado").replaceAll("_"," ")}
+function setStatus(mensagem,tipo=""){const el=document.getElementById("status");el.textContent=mensagem;el.className=`status ${tipo}`}
+
+function criarErroHttp(status,dados){
+  const corpo={};
+  if(typeof dados?.codigo==="string")corpo.codigo=dados.codigo.slice(0,100);
+  if(status<500&&typeof dados?.error==="string")corpo.error=dados.error.slice(0,300);
+  const mensagem=status===401
+    ?"Sessão expirada."
+    :status===403
+      ?(corpo.error||"Seu usuário não possui acesso a esta consulta.")
+      :(status>=500?"Não foi possível carregar sua carga.":(corpo.error||"Não foi possível concluir a consulta."));
+  const erro=new Error(mensagem);
+  erro.name="ApiError";
+  erro.status=status;
+  erro.corpo=corpo;
+  return erro;
+}
+
+async function apiGet(caminho,{signal}={}){
+  let resposta;
+  try{resposta=await fetch(API_BASE+caminho,{method:"GET",headers:{Authorization:`Bearer ${token}`},signal})}
+  catch(erro){
+    if(erro?.name==="AbortError")throw erro;
+    throw new Error("Não foi possível conectar ao serviço. Verifique sua internet e tente novamente.");
+  }
+  const texto=await resposta.text();
+  let dados=null;
+  if(texto){
+    try{dados=JSON.parse(texto)}
+    catch{
+      if(resposta.ok)throw new Error("O serviço retornou uma resposta inválida.");
+    }
+  }
+  if(!resposta.ok)throw criarErroHttp(resposta.status,dados);
+  if(!dados||typeof dados!=="object")throw new Error("O serviço retornou uma resposta vazia.");
+  return dados;
+}
+
+function consolidarProdutos(produtosRecebidos,saldosRecebidos){
+  const produtos=new Map(),saldos=new Map();
+  for(const item of Array.isArray(saldosRecebidos)?saldosRecebidos:[]){
+    const produtoId=Number(item?.produto_id);if(!Number.isSafeInteger(produtoId)||produtoId<=0)continue;
+    saldos.set(`${produtoId}:${item.bucket}`,item.saldo);
+    if(!produtos.has(produtoId))produtos.set(produtoId,{produto_id:produtoId,produto_nome:item.produto_nome,pacotes_por_fardo:null,fardos_fechados:null,fracionado_novo:null,descarte_pendente:null});
+  }
+  for(const item of Array.isArray(produtosRecebidos)?produtosRecebidos:[]){
+    const produtoId=Number(item?.produto_id);if(!Number.isSafeInteger(produtoId)||produtoId<=0)continue;
+    produtos.set(produtoId,{...produtos.get(produtoId),...item,produto_id:produtoId});
+  }
+  return [...produtos.values()].map(produto=>{
+    const id=Number(produto.produto_id),fracionado=`${id}:FRACIONADO_NOVO`,descarte=`${id}:DESCARTE_PENDENTE`;
+    return {...produto,fracionado_novo:saldos.has(fracionado)?saldos.get(fracionado):produto.fracionado_novo,descarte_pendente:saldos.has(descarte)?saldos.get(descarte):produto.descarte_pendente};
+  }).sort((a,b)=>String(a.produto_nome||"").localeCompare(String(b.produto_nome||""),"pt-BR"));
+}
+
+function renderizarProdutos(produtos){
+  const lista=document.getElementById("produtos"),vazio=document.getElementById("produtosVazio");lista.replaceChildren();vazio.classList.toggle("hidden",produtos.length>0);
+  for(const produto of produtos){
+    const porFardo=Number(produto.pacotes_por_fardo),conversao=Number.isSafeInteger(porFardo)&&porFardo>0?`${numero(porFardo)} pacotes por fardo`:"Conversão por fardo não informada";
+    const cartao=document.createElement("article");cartao.className="produto";
+    cartao.innerHTML=`<h3>${escapar(produto.produto_nome||`Produto #${produto.produto_id}`)}</h3><div class="conversao">${escapar(conversao)}</div><div class="saldos"><div class="saldo fardos"><span>Fardos fechados</span><strong>${numero(produto.fardos_fechados)}</strong></div><div class="saldo pacotes"><span>Pacotes disponíveis</span><strong>${numero(produto.fracionado_novo)}</strong></div><div class="saldo descarte"><span>Descarte pendente</span><strong>${numero(produto.descarte_pendente)}</strong></div></div>`;
+    lista.appendChild(cartao);
+  }
+}
+
+function renderizarSolicitacoes(solicitacoes,produtos){
+  const lista=document.getElementById("solicitacoes"),vazio=document.getElementById("solicitacoesVazio"),nomes=new Map(produtos.map(p=>[Number(p.produto_id),p.produto_nome]));
+  const registros=(Array.isArray(solicitacoes)?solicitacoes:[]).filter(item=>item?.status==="PENDENTE"||item?.status==="APROVADA");lista.replaceChildren();vazio.classList.toggle("hidden",registros.length>0);
+  for(const item of registros){
+    const cartao=document.createElement("article");cartao.className="solicitacao";
+    cartao.innerHTML=`<div><span class="rotulo">Produto</span><strong>${escapar(nomes.get(Number(item.produto_id))||`Produto #${item.produto_id}`)}</strong><br><span class="tag ${item.status.toLowerCase()}">${escapar(item.status)}</span></div><div><span class="rotulo">Quantidade</span><strong>${numero(item.quantidade_fardos)} fardo(s)</strong></div><div><span class="rotulo">Visita e motivo</span><strong>Visita #${escapar(item.visita_id)}</strong><br>${escapar(textoMotivo(item.motivo))}</div><div><span class="rotulo">Datas</span>Solicitada: ${escapar(dataBR(item.solicitada_em,true))}${item.decidida_em?`<br>Decidida: ${escapar(dataBR(item.decidida_em,true))}`:""}</div>`;
+    lista.appendChild(cartao);
+  }
+}
+
+let versaoCarregamento=0;
+let controladorCarregamento=null;
+
+async function carregar(){
+  const versaoAtual=++versaoCarregamento;
+  controladorCarregamento?.abort();
+  const controlador=new AbortController();
+  controladorCarregamento=controlador;
+  const contextoAtual=()=>versaoAtual===versaoCarregamento
+    &&controladorCarregamento===controlador&&!controlador.signal.aborted;
+  if(!contextoAtual())return;
+  setStatus("Carregando sua carga...");document.getElementById("semCarga").classList.add("hidden");document.getElementById("conteudoCarga").classList.add("hidden");
+  try{
+    const opcoes={signal:controlador.signal};
+    const [dadosCarga,dadosSaldos]=await Promise.all([apiGet("/api/minha-carga",opcoes),apiGet("/api/minha-carga/saldo-pacotes",opcoes)]);
+    if(!contextoAtual())return;
+    if(!dadosCarga.carga){document.getElementById("semCarga").classList.remove("hidden");setStatus("Nenhuma carga aberta encontrada para o seu usuário.");return}
+    const carga=dadosCarga.carga,produtos=consolidarProdutos(dadosCarga.produtos,dadosSaldos.saldos);
+    document.getElementById("cargaId").textContent=`Carga #${carga.id}`;document.getElementById("cargaData").textContent=dataBR(carga.data_carga);document.getElementById("cargaLocal").textContent=carga.local_nome||`Local #${carga.local_carga_id}`;
+    renderizarProdutos(produtos);renderizarSolicitacoes(dadosCarga.bonificacoes_fardo,produtos);document.getElementById("conteudoCarga").classList.remove("hidden");setStatus("Carga e saldos atualizados.","ok");
+  }catch(erro){
+    if(!contextoAtual()||erro?.name==="AbortError")return;
+    if(erro?.status===401){
+      if(!contextoAtual())return;
+      ["token","vendedorId","vendedorNome","vendedorRole"].forEach(chave=>localStorage.removeItem(chave));
+      if(!contextoAtual())return;
+      alert("Sua sessão expirou. Faça login novamente.");
+      if(!contextoAtual())return;
+      location.href="login.html";
+      return;
+    }
+    if(!contextoAtual())return;
+    setStatus(erro.message||"Não foi possível carregar sua carga.","err");
+  }finally{
+    if(versaoAtual===versaoCarregamento&&controladorCarregamento===controlador)controladorCarregamento=null;
+  }
+}
+
+if(token&&role==="vendedor")carregar();
+</script>
+</body>
+</html>
