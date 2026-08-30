@@ -22,8 +22,9 @@
     .tag{display:inline-block;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:850}.tag.good{background:#d1fae5;color:#065f46}.tag.warn{background:#fef3c7;color:#92400e}.tag.bad{background:#fee2e2;color:#991b1b}
     .filters{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:10px;margin-bottom:14px}label{display:block;font-size:12px;font-weight:800;color:#7c2d12;margin:0 0 5px 6px}input,select,textarea{width:100%;border:2px solid #fcd8af;border-radius:16px;padding:11px 13px;background:#fff;font-size:14px}textarea{min-height:90px;resize:vertical}.empty{text-align:center;padding:30px;color:#78716c}
     .modal{position:fixed;inset:0;background:rgba(30,15,7,.55);display:none;align-items:center;justify-content:center;padding:16px;z-index:20}.modal.open{display:flex}.modal-card{background:#fff;border-radius:24px;padding:22px;width:min(520px,100%);max-height:92vh;overflow:auto}.field{margin-bottom:13px}.modal-actions{display:flex;gap:10px;margin-top:12px}.modal-actions button{flex:1}
-    @media(max-width:760px){body{padding:10px}.top,.panel{padding:16px;border-radius:20px}.brand{align-items:flex-start}.logo{width:60px;height:60px}.filters{grid-template-columns:1fr 1fr}.actions>*{flex:1 1 42%}}
-    @media(max-width:460px){.filters{grid-template-columns:1fr}.actions>*{flex-basis:100%}.modal-actions{flex-direction:column}}
+    [hidden]{display:none!important}.workspace-switch{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}.workspace-tab{background:#fff;border:2px solid #fed7aa;color:#7c2d12}.workspace-tab[aria-selected="true"]{background:#ea580c;border-color:#ea580c;color:#fff}.scroll-hint{display:none;margin-top:10px;text-align:center;color:#9a3412;font-size:12px}
+    @media(max-width:760px){body{padding:10px}.top,.panel{padding:16px;border-radius:20px}.brand{align-items:flex-start}.logo{width:60px;height:60px}.filters{grid-template-columns:1fr 1fr}.actions>*{flex:1 1 42%}.workspace-switch{gap:6px}.workspace-tab{padding:11px 6px;font-size:12px}.scroll-hint{display:block}}
+    @media(max-width:460px){.filters{grid-template-columns:1fr}.actions>*{flex-basis:100%}.modal-actions{flex-direction:column}.workspace-switch{grid-template-columns:repeat(2,minmax(0,1fr))}.workspace-tab:last-child{grid-column:1/-1}}
   </style>
 </head>
 <body>
@@ -35,15 +36,28 @@
     </div>
     <div class="user" id="userInfo"></div>
     <div class="actions">
-      <button class="primary estoque-action" data-action="entrada">Entrada</button>
-      <button class="secondary estoque-action" data-action="ajuste">Ajuste</button>
       <button class="dark" id="btnHistorico">Histórico</button>
-      <button class="secondary estoque-action" data-action="inventario">Inventário inicial</button>
       <a class="button muted" href="dashboard.html">Dashboard</a>
     </div>
   </section>
 
   <div id="status" class="status">Carregando Estoque Central...</div>
+
+  <nav class="workspace-switch" role="tablist" aria-label="Áreas do Estoque Central">
+    <button type="button" class="workspace-tab" id="abaSaldoOperacoes" role="tab" aria-selected="true" aria-controls="painelSaldoOperacoes">Saldo e operações</button>
+    <button type="button" class="workspace-tab" id="abaMovimentacoes" role="tab" aria-selected="false" aria-controls="painelMovimentacoes" tabindex="-1">Movimentações</button>
+    <button type="button" class="workspace-tab" id="abaPendencias" role="tab" aria-selected="false" aria-controls="painelPendencias" tabindex="-1">Pendências sem baixa</button>
+  </nav>
+
+  <div id="painelSaldoOperacoes" role="tabpanel" aria-labelledby="abaSaldoOperacoes">
+  <section class="panel">
+    <h2>Operações de estoque</h2>
+    <div class="actions">
+      <button class="primary estoque-action" data-action="entrada">Entrada</button>
+      <button class="secondary estoque-action" data-action="ajuste">Ajuste</button>
+      <button class="secondary estoque-action" data-action="inventario">Inventário inicial</button>
+    </div>
+  </section>
 
   <section class="panel" id="inicializacao" hidden>
     <h2>Estoque Central ainda não inicializado</h2>
@@ -59,8 +73,11 @@
         <tbody id="saldoBody"><tr><td colspan="5" class="empty">Carregando...</td></tr></tbody>
       </table>
     </div>
+    <p class="scroll-hint">Deslize horizontalmente para consultar todas as colunas.</p>
   </section>
+  </div>
 
+  <div id="painelMovimentacoes" role="tabpanel" aria-labelledby="abaMovimentacoes" hidden>
   <section class="panel" id="historico">
     <h2>Histórico de movimentações</h2>
     <div class="filters">
@@ -77,12 +94,18 @@
         <tbody id="historicoBody"><tr><td colspan="8" class="empty">Nenhuma movimentação.</td></tr></tbody>
       </table>
     </div>
+    <p class="scroll-hint">Deslize horizontalmente para consultar todas as colunas.</p>
   </section>
+  </div>
+
+  <div id="painelPendencias" role="tabpanel" aria-labelledby="abaPendencias" hidden>
   <section class="panel" id="semBaixa">
     <h2>Vendas sem baixa de estoque</h2>
     <p>Conciliação administrativa não cria baixa retroativa. A correção física deve ser registrada por ajuste auditável.</p>
     <div class="table-wrap"><table><thead><tr><th>Venda</th><th>Data</th><th>Cliente</th><th>Vendedor</th><th>Motivo</th><th>Ação</th></tr></thead><tbody id="semBaixaBody"><tr><td colspan="6" class="empty">Carregando...</td></tr></tbody></table></div>
+    <p class="scroll-hint">Deslize horizontalmente para consultar todas as colunas.</p>
   </section>
+  </div>
 </main>
 
 <div class="modal" id="modalMovimento" role="dialog" aria-modal="true" aria-labelledby="modalTitulo">
@@ -110,6 +133,15 @@ if(!token){location.href="login.html"}
 if(role!=="admin"&&role!=="operacao"){alert("Acesso não permitido para este perfil.");location.href="dashboard.html"}
 
 document.getElementById("userInfo").textContent=`${nome} · ${role==="admin"?"Administrador":"Operação"}`;
+function mostrarAreaEstoque(area){
+  const areas={saldo:"painelSaldoOperacoes",movimentacoes:"painelMovimentacoes",pendencias:"painelPendencias"};
+  const abas={saldo:"abaSaldoOperacoes",movimentacoes:"abaMovimentacoes",pendencias:"abaPendencias"};
+  Object.entries(areas).forEach(([nomeArea,id])=>{document.getElementById(id).hidden=nomeArea!==area});
+  Object.entries(abas).forEach(([nomeArea,id])=>{const aba=document.getElementById(id),ativa=nomeArea===area;aba.setAttribute("aria-selected",String(ativa));aba.tabIndex=ativa?0:-1});
+}
+document.getElementById("abaSaldoOperacoes").onclick=()=>mostrarAreaEstoque("saldo");
+document.getElementById("abaMovimentacoes").onclick=()=>mostrarAreaEstoque("movimentacoes");
+document.getElementById("abaPendencias").onclick=()=>mostrarAreaEstoque("pendencias");
 const partesHoje=Object.fromEntries(new Intl.DateTimeFormat("en-US",{timeZone:"America/Cuiaba",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date()).filter(parte=>parte.type!=="literal").map(parte=>[parte.type,parte.value]));
 const hoje=`${partesHoje.year}-${partesHoje.month}-${partesHoje.day}`;
 document.getElementById("dataOperacao").value=hoje;
@@ -225,7 +257,7 @@ document.querySelectorAll(".estoque-action").forEach(botao=>botao.addEventListen
 document.getElementById("btnCancelar").onclick=fecharModal;
 document.getElementById("modalMovimento").addEventListener("click",event=>{if(event.target.id==="modalMovimento")fecharModal()});
 document.getElementById("movimentoForm").addEventListener("submit",salvarMovimento);
-document.getElementById("btnHistorico").onclick=()=>document.getElementById("historico").scrollIntoView({behavior:"smooth"});
+document.getElementById("btnHistorico").onclick=()=>mostrarAreaEstoque("movimentacoes");
 document.getElementById("btnFiltrar").onclick=carregarHistorico;
 document.getElementById("btnLimpar").onclick=()=>{["filtroProduto","filtroInicio","filtroFim","filtroTipo","filtroUsuario"].forEach(id=>document.getElementById(id).value="");carregarHistorico()};
 document.getElementById("btnInicializar").onclick=async()=>{if(!confirm("Criar o local único ESTOQUE CENTRAL?"))return;try{await api("/api/estoque/central/inicializar",{method:"POST",body:"{}"});await carregarEstoque();setStatus("Estoque Central inicializado. Faça a contagem física antes de registrar o inventário.","ok")}catch(error){setStatus(error.message,"err")}};

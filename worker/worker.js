@@ -210,21 +210,101 @@ async function listarClientes(env, user) {
   return json(result.results || []);
 }
 
-async function obterClientePorId(env, id) {
-  if (!Number.isInteger(id) || id <= 0) return json({ error: "ID de cliente inválido." }, 400);
-
-  const cliente = await env.DB.prepare(`
+async function buscarClienteFormalPorId(env, id) {
+  return env.DB.prepare(`
     SELECT
       id, vendedor_id, tipo_pessoa, documento, cnpj, cpf,
       razao_social, nome_estabelecimento, nome_fantasia,
-      ie, telefone, whatsapp, instagram, email, cep, endereco,
-      cidade, estado, observacoes_gerais, status_comercial,
-      status_cliente, 'cliente' AS tipo_origem
+      ie, situacao_ie, responsavel_empresa, responsavel_compra,
+      telefone, whatsapp, instagram, email, contato_emergencia,
+      cep, endereco, cidade, estado, concorrentes, observacoes_gerais,
+      status_comercial, status_cliente, ultima_visita,
+      created_at, updated_at, 'cliente' AS tipo_origem
     FROM clientes
     WHERE id = ?
   `).bind(id).first();
+}
+
+async function obterClientePorId(env, id) {
+  if (!Number.isInteger(id) || id <= 0) return json({ error: "ID de cliente inválido." }, 400);
+
+  const cliente = await buscarClienteFormalPorId(env, id);
 
   return cliente ? json(cliente) : json({ error: "Cliente não encontrado." }, 404);
+}
+
+async function atualizarCliente(request, env, user, id) {
+  if (!usuarioTemRole(user, "admin")) return acessoNegado();
+  if (!Number.isInteger(id) || id <= 0) return json({ error: "ID de cliente inválido." }, 400);
+
+  const atual = await buscarClienteFormalPorId(env, id);
+  if (!atual) return json({ error: "Cliente não encontrado." }, 404);
+
+  const entrada = await request.json();
+  const versaoEsperada = normalizeText(entrada.updated_at);
+  if (!versaoEsperada) return json({ error: "Versão do cadastro não informada. Recarregue o cliente." }, 400);
+
+  const tipoPessoa = normalizeText(entrada.tipo_pessoa).toUpperCase();
+  const cnpj = onlyNumbers(entrada.cnpj);
+  const cpf = onlyNumbers(entrada.cpf);
+  if (!['PJ', 'PF'].includes(tipoPessoa)) return json({ error: "Tipo de pessoa inválido." }, 400);
+  if (tipoPessoa === "PJ" && (cnpj.length !== 14 || cpf)) {
+    return json({ error: "Cliente PJ deve possuir CNPJ com 14 dígitos e não deve possuir CPF." }, 400);
+  }
+  if (tipoPessoa === "PF" && (cpf.length !== 11 || cnpj)) {
+    return json({ error: "Cliente PF deve possuir CPF com 11 dígitos e não deve possuir CNPJ." }, 400);
+  }
+
+  const documento = tipoPessoa === "PJ" ? cnpj : cpf;
+  const c = montarCliente({ ...entrada, tipo_pessoa: tipoPessoa, documento, cnpj, cpf,
+    vendedor_id: atual.vendedor_id, ultima_visita: atual.ultima_visita }, user);
+  const faltando = validarCliente(c);
+  if (faltando.length) return json({ error: "Campos obrigatórios faltando", campos: faltando }, 400);
+  if (!new Set(["pendente", "informada", "isento"]).has(c.situacao_ie)) {
+    return json({ error: "Situação da IE inválida." }, 400);
+  }
+  if (!new Set(["prospect", "ativo", "sem_compra", "perdido"]).has(c.status_comercial)) {
+    return json({ error: "Status comercial inválido." }, 400);
+  }
+  if (!new Set(["ativo", "inativo"]).has(c.status_cliente)) {
+    return json({ error: "Status do cliente inválido." }, 400);
+  }
+  if (c.estado.length !== 2) return json({ error: "Estado deve conter a sigla com 2 letras." }, 400);
+
+  const duplicado = await env.DB.prepare(
+    "SELECT id, nome_fantasia, razao_social FROM clientes WHERE documento = ? AND id <> ?"
+  ).bind(documento, id).first();
+  if (duplicado) return json({ error: "Outro cliente já está cadastrado com este documento", existente: duplicado }, 409);
+
+  const resultado = await env.DB.prepare(`UPDATE clientes SET
+    tipo_pessoa = ?, documento = ?, cnpj = ?, cpf = ?,
+    razao_social = ?, nome_estabelecimento = ?, nome_fantasia = ?,
+    ie = ?, situacao_ie = ?, responsavel_empresa = ?, responsavel_compra = ?,
+    telefone = ?, whatsapp = ?, instagram = ?, email = ?, contato_emergencia = ?,
+    cep = ?, endereco = ?, cidade = ?, estado = ?, concorrentes = ?,
+    observacoes_gerais = ?, status_comercial = ?, status_cliente = ?,
+    updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
+    WHERE id = ? AND updated_at = ?`)
+    .bind(c.tipo_pessoa, documento, c.cnpj || null, c.cpf || null,
+      c.razao_social, c.nome_estabelecimento, c.nome_fantasia,
+      c.ie, c.situacao_ie, c.responsavel_empresa, c.responsavel_compra,
+      c.telefone, c.whatsapp, c.instagram, c.email, c.contato_emergencia,
+      c.cep, c.endereco, c.cidade, c.estado, c.concorrentes,
+      c.observacoes_gerais, c.status_comercial, c.status_cliente,
+      id, versaoEsperada).run();
+
+  if (Number(resultado.meta?.changes || 0) !== 1) {
+    const concorrente = await buscarClienteFormalPorId(env, id);
+    return concorrente
+      ? json({ error: "O cadastro foi alterado por outra pessoa. Recarregue os dados antes de salvar." }, 409)
+      : json({ error: "Cliente não encontrado." }, 404);
+  }
+
+  const atualizado = await buscarClienteFormalPorId(env, id);
+  if (!atualizado || Number(atualizado.id) !== id) {
+    return json({ error: "A atualização foi gravada, mas não pôde ser confirmada com segurança." }, 503);
+  }
+  return json({ success: true, cliente: atualizado });
 }
 
 async function obterClienteAvulsoPorId(env, id) {
@@ -1002,6 +1082,7 @@ async function criarVenda(request, env, user) {
 
 // Comissão estimada por fardo. Este é o único valor a alterar quando a regra comercial mudar.
 const COMISSAO_POR_FARDO = 1.75;
+
 
 async function relatorioPeriodo(request, env, user, somenteTeste = false) {
   if (!usuarioTemRole(user, "admin", "vendedor")) return acessoNegado();
@@ -4963,6 +5044,7 @@ async function debugClientes(request, env, user) {
   });
 }
 
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -5003,6 +5085,9 @@ if (url.pathname.startsWith("/api/vendedores/") && request.method === "PUT") {
     if (url.pathname === "/api/clientes" && request.method === "GET") return listarClientes(env, user);
     if (/^\/api\/clientes\/\d+$/.test(url.pathname) && request.method === "GET") {
       return obterClientePorId(env, Number(url.pathname.split("/").pop()));
+    }
+    if (/^\/api\/clientes\/\d+$/.test(url.pathname) && request.method === "PUT") {
+      return atualizarCliente(request, env, user, Number(url.pathname.split("/").pop()));
     }
     if (url.pathname === "/api/clientes" && request.method === "POST") return criarCliente(request, env, user);
     if (url.pathname === "/api/clientes-avulsos" && request.method === "GET") return listarClientesAvulsos(env);

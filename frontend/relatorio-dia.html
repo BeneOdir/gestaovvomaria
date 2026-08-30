@@ -9,10 +9,10 @@
   <link rel="stylesheet" href="comprovante.css">
   <title>Gestão Vovó Maria · Relatórios</title>
   <style>
-    *{box-sizing:border-box}body{font-family:'Segoe UI',system-ui,sans-serif;background:#F5F0E8;color:#431407;margin:0;padding:16px}.wrap{max-width:1040px;margin:auto}.card{background:#fff;border:1px solid #FED7AA;border-radius:20px;padding:16px;margin-bottom:12px}.nav,.acoes,.atalhos,.grid{display:flex;flex-wrap:wrap;gap:9px}.nav a,.btn{border:0;border-radius:999px;padding:11px 14px;background:#7C2D12;color:#fff;text-decoration:none;font-weight:800;cursor:pointer}.btn{background:#EA580C}.btn.sec{background:#FED7AA;color:#7C2D12}.btn.perigo{background:#B91C1C}.grid>*{flex:1;min-width:180px}input,select,textarea{width:100%;padding:11px;border:2px solid #FED7AA;border-radius:15px;font:inherit}textarea{min-height:90px;resize:vertical}.metricas{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px}.metrica{background:#FFF7ED;border-radius:16px;padding:13px}.metrica strong{display:block;font-size:20px;color:#EA580C}.status{background:#FEF3C7;padding:12px;border-radius:15px;margin-bottom:12px}.status.ok{background:#D1FAE5}.status.err{background:#FEE2E2}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #FED7AA;vertical-align:top}.empresa{font-weight:900;color:#78350F}.cabecalho-relatorio{display:flex;justify-content:space-between;gap:16px;align-items:start}.caixa-dinheiro{border:3px solid #15803D;background:#F0FDF4}.caixa-dinheiro h2{color:#166534}.valor-entregar{text-align:center;background:#166534;color:#fff;border-radius:18px;padding:16px;margin:12px 0}.valor-entregar span{display:block;font-weight:900}.valor-entregar strong{display:block;font-size:clamp(28px,7vw,44px)}.modal{position:fixed;inset:0;background:#0008;display:grid;place-items:center;padding:16px;z-index:10}.modal[hidden]{display:none}.ticket{background:#fff;max-width:620px;width:100%;max-height:90vh;overflow:auto;padding:22px;border-radius:20px}.ticket-item{display:flex;justify-content:space-between;gap:12px;border-bottom:1px dashed #ccc;padding:7px 0}.right{text-align:right}.venda-nao{color:#78716C}.aviso-exclusao{background:#FEE2E2;border:1px solid #FCA5A5;border-radius:15px;padding:12px;margin-top:16px}@media(max-width:700px){table{font-size:12px}.cabecalho-relatorio{display:block}.tabela-scroll{overflow:auto}}
+    *{box-sizing:border-box}body{font-family:'Segoe UI',system-ui,sans-serif;background:#F5F0E8;color:#431407;margin:0;padding:16px}.wrap{max-width:1040px;margin:auto}.card{background:#fff;border:1px solid #FED7AA;border-radius:20px;padding:16px;margin-bottom:12px}.nav,.acoes,.atalhos,.grid{display:flex;flex-wrap:wrap;gap:9px}.nav a,.btn{border:0;border-radius:999px;padding:11px 14px;background:#7C2D12;color:#fff;text-decoration:none;font-weight:800;cursor:pointer}.btn{background:#EA580C}.btn.sec{background:#FED7AA;color:#7C2D12}.btn.perigo{background:#B91C1C}.grid>*{flex:1;min-width:180px}input,select,textarea{width:100%;padding:11px;border:2px solid #FED7AA;border-radius:15px;font:inherit}textarea{min-height:90px;resize:vertical}.metricas{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px}.metrica{background:#FFF7ED;border-radius:16px;padding:13px}.metrica strong{display:block;font-size:20px;color:#EA580C}.status{background:#FEF3C7;padding:12px;border-radius:15px;margin-bottom:12px}.status.ok{background:#D1FAE5}.status.err{background:#FEE2E2}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #FED7AA;vertical-align:top}.empresa{font-weight:900;color:#78350F}.cabecalho-relatorio{display:flex;justify-content:space-between;gap:16px;align-items:start}.caixa-dinheiro{border:3px solid #15803D;background:#F0FDF4}.caixa-dinheiro h2{color:#166534}.valor-entregar{text-align:center;background:#166534;color:#fff;border-radius:18px;padding:16px;margin:12px 0}.valor-entregar span{display:block;font-weight:900}.valor-entregar strong{display:block;font-size:clamp(28px,7vw,44px)}.modal{position:fixed;inset:0;background:#0008;display:grid;place-items:center;padding:16px;z-index:10}.modal[hidden]{display:none}.ticket{background:#fff;max-width:620px;width:100%;max-height:90vh;overflow:auto;padding:22px;border-radius:20px}.ticket-item{display:flex;justify-content:space-between;gap:12px;border-bottom:1px dashed #ccc;padding:7px 0}.right{text-align:right}.venda-nao{color:#78716C}.aviso-exclusao{background:#FEE2E2;border:1px solid #FCA5A5;border-radius:15px;padding:12px;margin-top:16px}.areas-relatorio{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px}.area-relatorio-tab{width:100%;background:#fff;border:2px solid #FED7AA;color:#7C2D12}.area-relatorio-tab[aria-selected="true"]{background:#EA580C;border-color:#EA580C;color:#fff}@media(max-width:700px){table{font-size:12px}.cabecalho-relatorio{display:block}.tabela-scroll{overflow:auto}}@media(max-width:460px){.areas-relatorio{grid-template-columns:repeat(2,minmax(0,1fr))}.area-relatorio-tab:last-child{grid-column:1/-1}}
     @page{size:A4;margin:12mm}
     @media print{
-      body{background:#fff;padding:0;font-size:10pt}.nao-imprimir,.nav,.filtros,.acoes,.status,.btn{display:none!important}.wrap{max-width:none}.card{border:0;border-radius:0;padding:5px 0;margin:0 0 8px;break-inside:avoid}.conteudo-relatorio{display:block!important}.metricas{grid-template-columns:repeat(4,1fr)}table{font-size:8.5pt}th,td{padding:4px}.modal{display:none!important}
+      body{background:#fff;padding:0;font-size:10pt}.nao-imprimir,.nav,.filtros,.acoes,.status,.btn{display:none!important}.wrap{max-width:none}.card{border:0;border-radius:0;padding:5px 0;margin:0 0 8px;break-inside:avoid}.conteudo-relatorio,.painel-relatorio{display:block!important}.metricas{grid-template-columns:repeat(4,1fr)}table{font-size:8.5pt}th,td{padding:4px}.modal{display:none!important}
       body.imprimindo-comprovante #areaImpressaoComprovante{display:block!important}
     }
   </style>
@@ -24,16 +24,33 @@
   <section id="resultado" class="conteudo-relatorio" hidden>
     <header class="card cabecalho-relatorio"><div><div class="empresa">Vovó Maria Pães e Biscoitos</div><h1 id="tituloRelatorio"></h1><div id="periodoRelatorio"></div></div><div class="right"><strong id="usuarioRelatorio"></strong><br><span id="geradoEm"></span></div></header>
     <div class="acoes nao-imprimir card"><button class="btn" id="compartilhar">Compartilhar relatório</button><button class="btn sec" id="copiar">Copiar resumo</button><button class="btn" id="imprimir">Imprimir / Salvar em PDF</button></div>
+    <nav class="areas-relatorio card nao-imprimir" role="tablist" aria-label="Áreas do relatório">
+      <button type="button" class="btn area-relatorio-tab" id="abaResumo" role="tab" aria-selected="true" aria-controls="painelResumo">Resumo</button>
+      <button type="button" class="btn area-relatorio-tab" id="abaProdutos" role="tab" aria-selected="false" aria-controls="painelProdutos" tabindex="-1">Produtos</button>
+      <button type="button" class="btn area-relatorio-tab" id="abaClientes" role="tab" aria-selected="false" aria-controls="painelClientes" tabindex="-1">Clientes</button>
+      <button type="button" class="btn area-relatorio-tab" id="abaVendas" role="tab" aria-selected="false" aria-controls="painelVendas" tabindex="-1">Vendas</button>
+      <button type="button" class="btn area-relatorio-tab" id="abaCanceladas" role="tab" aria-selected="false" aria-controls="painelCanceladas" tabindex="-1">Canceladas</button>
+    </nav>
+    <div id="painelResumo" class="painel-relatorio" role="tabpanel" aria-labelledby="abaResumo">
     <div id="metricas" class="card metricas"></div>
     <section id="secaoComissao" class="card" hidden><h2>Produção e comissão estimada</h2><div id="comissao" class="metricas"></div></section>
     <section id="secaoDinheiro" class="card caixa-dinheiro" hidden><h2>FECHAMENTO DE DINHEIRO DO VENDEDOR</h2><div class="valor-entregar"><span>A ENTREGAR EM DINHEIRO</span><strong id="valorEntregar"></strong></div><div id="dinheiroMetricas" class="metricas"></div></section>
     <section id="secaoOutrasFormas" class="card" hidden><h2>RECEBIMENTOS BANCÁRIOS E A PRAZO</h2><p>Participam do faturamento e da comissão, mas não do dinheiro físico a entregar.</p><div id="outrasFormas" class="tabela-scroll"></div></section>
     <section class="card"><h2>Fechamento por forma de pagamento</h2><div id="formas" class="tabela-scroll"></div></section>
     <section id="secaoVendedores" class="card"><h2>Resumo por vendedor</h2><div id="vendedores" class="tabela-scroll"></div></section>
+    </div>
+    <div id="painelProdutos" class="painel-relatorio" role="tabpanel" aria-labelledby="abaProdutos" hidden>
     <section class="card"><h2>Produtos vendidos</h2><div id="produtos" class="tabela-scroll"></div></section>
+    </div>
+    <div id="painelClientes" class="painel-relatorio" role="tabpanel" aria-labelledby="abaClientes" hidden>
     <section class="card"><h2>Clientes atendidos</h2><div id="clientes" class="tabela-scroll"></div></section>
+    </div>
+    <div id="painelVendas" class="painel-relatorio" role="tabpanel" aria-labelledby="abaVendas" hidden>
     <section class="card"><h2>Vendas do período</h2><div id="vendas" class="tabela-scroll"></div></section>
+    </div>
+    <div id="painelCanceladas" class="painel-relatorio" role="tabpanel" aria-labelledby="abaCanceladas" hidden>
     <section class="card"><h2>Vendas canceladas (histórico)</h2><div id="vendasCanceladas" class="tabela-scroll"></div></section>
+    </div>
   </section>
 </main>
 <div id="modalTicket" class="modal" hidden><article class="ticket"><div id="ticketConteudo"></div><div class="acoes comprovante-acoes nao-imprimir"><button class="btn" id="compartilharTicket">Compartilhar comprovante</button><button class="btn sec" id="copiarTicket">Copiar texto</button><button class="btn" id="imprimirTicket">Imprimir comprovante</button><button class="btn sec" id="fecharTicket">Fechar</button></div></article></div>
@@ -71,6 +88,12 @@ function imprimirComprovanteAtual(){imprimirComprovante(document.getElementById(
 function copiarResumoRelatorio(){return copiarParaAreaTransferencia(textoAtual,"Resumo do relatório copiado.")}
 async function compartilharRelatorioAtual(){if(navigator.share)await navigator.share({title:titulo,text:textoAtual});else await copiarResumoRelatorio()}
 function imprimirRelatorioAtual(){window.print()}
+function mostrarAreaRelatorio(area){
+  const areas={resumo:"painelResumo",produtos:"painelProdutos",clientes:"painelClientes",vendas:"painelVendas",canceladas:"painelCanceladas"};
+  const abas={resumo:"abaResumo",produtos:"abaProdutos",clientes:"abaClientes",vendas:"abaVendas",canceladas:"abaCanceladas"};
+  Object.entries(areas).forEach(([nomeArea,id])=>{document.getElementById(id).hidden=nomeArea!==area});
+  Object.entries(abas).forEach(([nomeArea,id])=>{const aba=document.getElementById(id),ativa=nomeArea===area;aba.setAttribute("aria-selected",String(ativa));aba.tabIndex=ativa?0:-1});
+}
 function renderizar(d){
   dadosAtuais=d;
   const r=d.resumo_vendedor||d.resumo_geral||d.resumo||{};
@@ -108,6 +131,7 @@ function renderizar(d){
   document.querySelectorAll("[data-gerenciar]").forEach(b=>b.onclick=()=>abrirGerenciamento(Number(b.dataset.gerenciar)));
   document.querySelectorAll("[data-ticket-cancelado]").forEach(b=>b.onclick=()=>abrirTicket(Number(b.dataset.ticketCancelado)));
   textoAtual=montarResumoTexto(d);
+  mostrarAreaRelatorio("resumo");
   document.getElementById("resultado").hidden=false;
   setStatus("Relatório gerado.","ok");
 }
@@ -180,6 +204,11 @@ aplicarMascaraMoeda(document.getElementById("gerenciarRecebido"));aplicarMascara
 function inicializarDatasRelatorio(){periodo("hoje",false)}
 function inicializarFiltroVisao(){const visao=document.getElementById("visao");visao.addEventListener("change",atualizarFiltros);atualizarFiltros()}
 function inicializarTelaRelatorio(){
+  document.getElementById("abaResumo").addEventListener("click",()=>mostrarAreaRelatorio("resumo"));
+  document.getElementById("abaProdutos").addEventListener("click",()=>mostrarAreaRelatorio("produtos"));
+  document.getElementById("abaClientes").addEventListener("click",()=>mostrarAreaRelatorio("clientes"));
+  document.getElementById("abaVendas").addEventListener("click",()=>mostrarAreaRelatorio("vendas"));
+  document.getElementById("abaCanceladas").addEventListener("click",()=>mostrarAreaRelatorio("canceladas"));
   document.querySelectorAll("[data-periodo]").forEach(botao=>botao.addEventListener("click",()=>periodo(botao.dataset.periodo)));
   document.getElementById("buscar").addEventListener("click",carregar);
   document.getElementById("copiar").addEventListener("click",copiarResumoRelatorio);

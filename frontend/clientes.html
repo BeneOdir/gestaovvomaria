@@ -38,10 +38,18 @@
     .hidden{display:none}
     .bar{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-top:10px}
     .small{font-size:12px;color:#78716C}
-    .search-panel{margin-top:14px;border:1px solid #FED7AA;background:#FFFBEB;border-radius:20px;padding:14px}
+    .mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+    .mode-button{border:2px solid #FED7AA;border-radius:18px;padding:14px 12px;background:#FFF7ED;color:#7C2D12;font-size:15px;font-weight:900;cursor:pointer}
+    .mode-button[aria-selected="true"]{border-color:#EA580C;background:#EA580C;color:#fff;box-shadow:0 5px 14px rgba(234,88,12,.22)}
+    .workspace-panel{border:1px solid #FED7AA;background:#fff;border-radius:22px;padding:16px;margin-top:12px}
+    .workspace-panel[hidden]{display:none}
+    .workspace-title{font-size:19px;color:#78350F;margin-bottom:4px;text-align:center}
+    .workspace-note{font-size:12px;color:#9A3412;text-align:center;margin-bottom:14px}
+    .search-panel{border:1px solid #FED7AA;background:#FFFBEB;border-radius:20px;padding:14px}
     .search-title{font-weight:900;color:#78350F;margin-bottom:10px;text-align:center}
     .mini-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
-    .card-actions{display:grid;grid-template-columns:1fr;gap:8px;margin-top:10px}
+    .card-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
+    .card-actions>*:last-child:nth-child(odd){grid-column:1/-1}
     .btn-mini{display:block;text-align:center;text-decoration:none;border:0;border-radius:999px;padding:9px 10px;font-weight:900;font-size:12px;background:#EA580C;color:white}
     .btn-mini.secondary{background:#7C2D12}
     .count-box{border:1px solid #FED7AA;border-radius:18px;padding:10px;margin-top:12px;background:#FFF7ED;font-size:13px;color:#7C2D12}
@@ -55,7 +63,9 @@
     .detail-item.highlight{border-width:2px;background:#FFFBEB;font-size:15px}
     .modal-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
     .copy-message{min-height:22px;margin-top:9px;text-align:center;color:#065F46;font-weight:800}
-    @media(max-width:620px){.grid2,.actions,.details-grid,.modal-actions{grid-template-columns:1fr}.top{flex-direction:column;text-align:center}.logo{width:130px;height:130px}.details-panel{padding:14px}.card-actions{grid-template-columns:1fr}}
+    .secondary-actions{margin-top:14px;border:1px solid #E7E5E4;border-radius:18px;background:#FAFAF9;padding:4px 12px 12px}
+    .secondary-actions summary{cursor:pointer;padding:12px 2px 4px;color:#57534E;font-weight:900;text-align:center}
+    @media(max-width:620px){body{padding:10px}.container{padding:14px;border-radius:22px}.grid2,.actions,.details-grid,.modal-actions{grid-template-columns:1fr}.top{flex-direction:column;text-align:center}.logo{width:110px;height:110px}.details-panel{padding:14px}.card-actions{grid-template-columns:1fr}.mode-switch{position:sticky;top:6px;z-index:20;background:#fff;padding:6px;border-radius:20px;box-shadow:0 5px 16px rgba(67,20,7,.12)}.mode-button{padding:13px 8px;font-size:14px}.workspace-panel{padding:12px}}
   </style>
 </head>
 <body>
@@ -63,7 +73,7 @@
   <div class="top">
     <img src="images/logo-vm-gestao.png" class="logo" alt="Gestão Vovó Maria">
     <div>
-      <h1>Cadastro de Clientes</h1>
+      <h1>Clientes</h1>
       <div class="sub">Gestão Vovó Maria · Software de Gestão Comercial</div>
       <div class="small" id="userInfo"></div>
     </div>
@@ -71,6 +81,14 @@
 
   <div id="statusMsg" class="status">Preencha os dados do cliente.</div>
 
+  <div class="mode-switch" role="tablist" aria-label="Funções de clientes">
+    <button class="mode-button" id="abaLocalizar" type="button" role="tab" aria-selected="true" aria-controls="painelLocalizar">Localizar clientes</button>
+    <button class="mode-button" id="abaCadastro" type="button" role="tab" aria-selected="false" aria-controls="painelCadastro">Cadastrar cliente</button>
+  </div>
+
+  <section id="painelCadastro" class="workspace-panel" role="tabpanel" aria-labelledby="abaCadastro" hidden>
+  <h2 class="workspace-title" id="tituloFormularioCliente">Cadastro de Clientes</h2>
+  <p class="workspace-note" id="notaFormularioCliente">Preencha os dados e salve o cliente neste aparelho.</p>
   <form id="clienteForm">
     <div class="grid2">
       <div class="group">
@@ -156,23 +174,16 @@
     <div class="group"><label>Concorrentes</label><input id="concorrentes" placeholder="Separe por vírgula"></div>
     <div class="group"><label>Observações gerais</label><textarea id="observacoes_gerais" rows="3"></textarea></div>
 
-    <button class="btn primary" type="submit">Salvar cliente</button>
+    <button class="btn primary" id="btnSalvarCliente" type="submit">Salvar cliente</button>
+    <button class="btn muted hidden" id="btnCancelarEdicao" type="button">Cancelar edição</button>
   </form>
+  </section>
 
-  <div class="actions">
-    <button class="btn muted" type="button" onclick="location.href='dashboard.html'">Dashboard</button>
-    <button class="btn dark" type="button" onclick="location.href='visita.html'">Visita/Venda</button>
-    <button class="btn soft" type="button" onclick="location.href='relatorio-dia.html'">Relatórios</button>
-    <button class="btn soft" id="navProdutos" type="button" onclick="location.href='produtos.html'">Produtos</button>
-    <button class="btn dark" id="btnListar" type="button">Ver clientes locais</button>
-    <button class="btn soft" id="btnListarNuvem" type="button">Ver clientes da nuvem</button>
-    <button class="btn soft" id="btnSincronizar" type="button">Sincronizar pendentes</button>
-    <button class="btn muted" id="btnLimparLocal" type="button">Limpar dados locais de teste</button>
-  </div>
-  <button class="btn muted" id="btnSair" type="button">Sair</button>
-
+  <section id="painelLocalizar" class="workspace-panel" role="tabpanel" aria-labelledby="abaLocalizar">
+  <h2 class="workspace-title">Localizar clientes</h2>
+  <p class="workspace-note">Pesquise e visualize somente os clientes necessários.</p>
   <div class="search-panel">
-    <div class="search-title">🔎 Localizar clientes</div>
+    <div class="search-title">🔎 Busca e filtros</div>
     <div class="group">
       <label>Buscar por nome, CNPJ/CPF, cidade, bairro, telefone ou Instagram</label>
       <input id="buscaTexto" placeholder="Ex.: paulista, cuiabá, várzea, 6530, @cliente">
@@ -217,6 +228,22 @@
   </div>
 
   <div id="listaClientes"></div>
+  </section>
+
+  <details class="secondary-actions">
+    <summary>Navegação e outras ações</summary>
+    <div class="actions">
+      <button class="btn muted" type="button" onclick="location.href='dashboard.html'">Dashboard</button>
+      <button class="btn dark" type="button" onclick="location.href='visita.html'">Visita/Venda</button>
+      <button class="btn soft" type="button" onclick="location.href='relatorio-dia.html'">Relatórios</button>
+      <button class="btn soft" id="navProdutos" type="button" onclick="location.href='produtos.html'">Produtos</button>
+      <button class="btn dark" id="btnListar" type="button">Ver clientes locais</button>
+      <button class="btn soft" id="btnListarNuvem" type="button">Ver clientes da nuvem</button>
+      <button class="btn soft" id="btnSincronizar" type="button">Sincronizar pendentes</button>
+      <button class="btn muted" id="btnLimparLocal" type="button">Limpar dados locais de teste</button>
+    </div>
+    <button class="btn muted" id="btnSair" type="button">Sair</button>
+  </details>
 </div>
 
 <div id="modalCliente" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="tituloModalCliente">
@@ -251,6 +278,11 @@ let ultimaListaClientes = [];
 let ultimaOrigemClientes = "clientes locais deste aparelho";
 let clientesExibidos = [];
 let clienteDetalhado = null;
+let clienteDetalhadoRegistro = null;
+let clienteEmEdicao = null;
+let pesquisaExecutada = false;
+let pesquisaSequencia = 0;
+let buscaDinamicaTimer = null;
 
 if(!token){
   alert("Faça login primeiro.");
@@ -267,6 +299,36 @@ function setStatus(msg, tipo="warn"){
   el.textContent = msg;
   el.className = "status " + tipo;
 }
+
+function ocultarResultadosClientes(){
+  pesquisaSequencia++;
+  pesquisaExecutada = false;
+  clientesExibidos = [];
+  document.getElementById("listaClientes").replaceChildren();
+}
+
+function mostrarAreaClientes(area, focar=true){
+  const localizar = area !== "cadastro";
+  const painelLocalizar = document.getElementById("painelLocalizar");
+  const painelCadastro = document.getElementById("painelCadastro");
+  const abaLocalizar = document.getElementById("abaLocalizar");
+  const abaCadastro = document.getElementById("abaCadastro");
+  painelLocalizar.hidden = !localizar;
+  painelCadastro.hidden = localizar;
+  abaLocalizar.setAttribute("aria-selected", String(localizar));
+  abaCadastro.setAttribute("aria-selected", String(!localizar));
+  abaLocalizar.tabIndex = localizar ? 0 : -1;
+  abaCadastro.tabIndex = localizar ? -1 : 0;
+  if(localizar) ocultarResultadosClientes();
+  if(focar){
+    const destino = localizar ? document.getElementById("buscaTexto") : document.getElementById("tipo_pessoa");
+    destino?.focus({preventScroll:true});
+    (localizar ? painelLocalizar : painelCadastro).scrollIntoView({behavior:"smooth",block:"start"});
+  }
+}
+
+document.getElementById("abaLocalizar").addEventListener("click", ()=>mostrarAreaClientes("localizar"));
+document.getElementById("abaCadastro").addEventListener("click", ()=>mostrarAreaClientes("cadastro"));
 
 function maskCNPJ(v){ return onlyNumbers(v).replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{0,2}).*/,"$1.$2.$3/$4-$5").slice(0,18); }
 function maskCPF(v){ return onlyNumbers(v).replace(/^(\d{3})(\d{3})(\d{3})(\d{0,2}).*/,"$1.$2.$3-$4").slice(0,14); }
@@ -290,6 +352,9 @@ document.getElementById("tipo_pessoa").addEventListener("change", function(){
   const pj = this.value === "PJ";
   document.getElementById("areaCNPJ").classList.toggle("hidden", !pj);
   document.getElementById("areaCPF").classList.toggle("hidden", pj);
+  if(clienteEmEdicao){
+    document.getElementById(pj ? "cpf" : "cnpj").value = "";
+  }
 });
 
 document.getElementById("cep").addEventListener("blur", async function(){
@@ -406,11 +471,106 @@ function validar(c){
   return null;
 }
 
+function restaurarModoNovoCadastro(limpar=true){
+  clienteEmEdicao = null;
+  document.getElementById("tituloFormularioCliente").textContent = "Cadastro de Clientes";
+  document.getElementById("notaFormularioCliente").textContent = "Preencha os dados e salve o cliente neste aparelho.";
+  document.getElementById("btnSalvarCliente").textContent = "Salvar cliente";
+  document.getElementById("btnSalvarCliente").disabled = false;
+  document.getElementById("btnCancelarEdicao").classList.add("hidden");
+  document.getElementById("ultima_visita").disabled = false;
+  if(limpar){
+    document.getElementById("clienteForm").reset();
+    document.getElementById("tipo_pessoa").dispatchEvent(new Event("change"));
+  }
+}
+
+function preencherFormularioEdicao(cliente){
+  const valor = campo => cliente?.[campo] ?? "";
+  document.getElementById("tipo_pessoa").value = valor("tipo_pessoa") === "PF" ? "PF" : "PJ";
+  document.getElementById("tipo_pessoa").dispatchEvent(new Event("change"));
+  document.getElementById("cnpj").value = maskCNPJ(valor("cnpj"));
+  document.getElementById("cpf").value = maskCPF(valor("cpf"));
+  document.getElementById("razao_social").value = valor("razao_social") || valor("nome_estabelecimento");
+  document.getElementById("nome_fantasia").value = valor("nome_fantasia");
+  document.getElementById("ie").value = valor("ie");
+  document.getElementById("situacao_ie").value = valor("situacao_ie") || "pendente";
+  document.getElementById("responsavel_empresa").value = valor("responsavel_empresa");
+  document.getElementById("responsavel_compra").value = valor("responsavel_compra");
+  document.getElementById("telefone").value = maskPhone(valor("telefone"));
+  document.getElementById("whatsapp").value = maskPhone(valor("whatsapp"));
+  document.getElementById("instagram").value = valor("instagram");
+  document.getElementById("email").value = valor("email");
+  document.getElementById("contato_emergencia").value = valor("contato_emergencia");
+  document.getElementById("cep").value = maskCEP(valor("cep"));
+  document.getElementById("endereco").value = valor("endereco");
+  document.getElementById("cidade").value = valor("cidade");
+  document.getElementById("estado").value = valor("estado");
+  document.getElementById("status_cliente").value = valor("status_cliente") || "ativo";
+  document.getElementById("ultima_visita").value = valor("ultima_visita");
+  document.getElementById("ultima_visita").disabled = true;
+  document.getElementById("concorrentes").value = valor("concorrentes");
+  document.getElementById("observacoes_gerais").value = valor("observacoes_gerais");
+  document.getElementById("status_comercial").value = valor("status_comercial") || "prospect";
+}
+
+function iniciarEdicaoCliente(){
+  const cliente = clienteDetalhadoRegistro;
+  const id = Number(cliente?.id || 0);
+  if(vendedorRole !== "admin" || cliente?.tipo_origem !== "cliente" || cliente?._origem_nuvem !== true || !id || !cliente?.updated_at){
+    setStatus("Somente cliente formal da nuvem pode ser corrigido pelo administrador.", "err");
+    return;
+  }
+  clienteEmEdicao = { id, updated_at: String(cliente.updated_at), documentoOriginal: onlyNumbers(cliente.documento || cliente.cnpj || cliente.cpf) };
+  preencherFormularioEdicao(cliente);
+  document.getElementById("tituloFormularioCliente").textContent = `Editar cliente #${id}`;
+  document.getElementById("notaFormularioCliente").textContent = "Corrija os dados necessários. O ID e os vínculos históricos serão preservados.";
+  document.getElementById("btnSalvarCliente").textContent = "Salvar correção";
+  document.getElementById("btnCancelarEdicao").classList.remove("hidden");
+  fecharDadosCliente();
+  mostrarAreaClientes("cadastro");
+  setStatus(`Editando cliente #${id}. Confira os dados antes de salvar.`, "warn");
+}
+
+async function salvarEdicaoCliente(cliente){
+  const edicao = clienteEmEdicao;
+  if(!edicao) return;
+  const cnpj = onlyNumbers(cliente.cnpj), cpf = onlyNumbers(cliente.cpf);
+  if(cliente.tipo_pessoa === "PJ" && (cnpj.length !== 14 || cpf)) throw new Error("Cliente PJ deve possuir CNPJ com 14 dígitos e não deve possuir CPF.");
+  if(cliente.tipo_pessoa === "PF" && (cpf.length !== 11 || cnpj)) throw new Error("Cliente PF deve possuir CPF com 11 dígitos e não deve possuir CNPJ.");
+  if(cliente.documento !== edicao.documentoOriginal && !confirm("O CPF/CNPJ identifica o cliente. Confirma a correção deste documento mantendo o mesmo ID e histórico?")) return;
+
+  const botao = document.getElementById("btnSalvarCliente");
+  botao.disabled = true;
+  setStatus("Salvando correção no cadastro da nuvem...", "warn");
+  try{
+    const resp = await fetch(`${API_URL}/api/clientes/${edicao.id}`, {
+      method:"PUT",
+      headers:{ "Content-Type":"application/json", "Authorization":`Bearer ${token}` },
+      body:JSON.stringify({ ...cliente, updated_at:edicao.updated_at })
+    });
+    const dados = await resp.json().catch(()=>({}));
+    if(!resp.ok) throw new Error(dados.error || "Não foi possível atualizar o cliente.");
+    if(dados.success !== true || Number(dados.cliente?.id) !== edicao.id) throw new Error("A API não confirmou a atualização do mesmo cliente.");
+    restaurarModoNovoCadastro(true);
+    mostrarAreaClientes("localizar", false);
+    setStatus(`Cliente #${edicao.id} corrigido com sucesso. Faça uma nova pesquisa para conferir.`, "ok");
+  }finally{
+    if(clienteEmEdicao) botao.disabled = false;
+  }
+}
+
 document.getElementById("clienteForm").addEventListener("submit", async (e)=>{
   e.preventDefault();
   const cliente = montarCliente();
   const erro = validar(cliente);
   if(erro){ setStatus(erro, "err"); return; }
+
+  if(clienteEmEdicao){
+    try{ await salvarEdicaoCliente(cliente); }
+    catch(err){ setStatus("Erro ao corrigir cliente: " + err.message, "err"); }
+    return;
+  }
 
   const jaExiste = await db.clientes.where("documento").equals(cliente.documento).first();
   if(jaExiste){
@@ -456,6 +616,11 @@ function textoBuscaCliente(c){
 
 function renderClientesFiltrados(){
   const el = document.getElementById("listaClientes");
+  if(!pesquisaExecutada){
+    clientesExibidos = [];
+    el.replaceChildren();
+    return;
+  }
   const busca = (document.getElementById("buscaTexto")?.value || "").trim().toLowerCase();
   const cidade = (document.getElementById("filtroCidade")?.value || "").trim().toLowerCase();
   const statusComercial = document.getElementById("filtroStatusComercial")?.value || "";
@@ -545,6 +710,7 @@ function dadosNormalizados(c){
 }
 
 function renderDetalhesCliente(c){
+  clienteDetalhadoRegistro = { ...c };
   clienteDetalhado = dadosNormalizados(c);
   const campos = [
     ["ID", "id"], ["Razão social ou nome", "razaoSocial"], ["Nome fantasia", "nomeFantasia"],
@@ -559,6 +725,11 @@ function renderDetalhesCliente(c){
   document.getElementById("detalhesCliente").innerHTML = campos.map(([rotulo, chave, destaque]) =>
     `<div class="detail-item${destaque ? " highlight" : ""}"><span class="detail-label">${rotulo}</span>${escaparHtml(clienteDetalhado[chave])}</div>`
   ).join("");
+  const editavel = vendedorRole === "admin" && c.tipo_origem === "cliente"
+    && c._origem_nuvem === true && Number(c.id) > 0 && !!c.updated_at;
+  const botaoEditar = document.getElementById("btnEditarCliente");
+  botaoEditar.disabled = !editavel;
+  botaoEditar.title = editavel ? "Corrigir este cadastro" : "Edição disponível somente para cliente formal da nuvem e usuário ADMIN";
   document.getElementById("mensagemCopia").textContent = "";
   document.getElementById("modalCliente").classList.remove("hidden");
   document.body.style.overflow = "hidden";
@@ -569,7 +740,7 @@ async function abrirDadosCliente(indice){
   if(!resumo) return;
   const id = Number(resumo.id || resumo.cliente_id || 0);
   const origemNuvem = String(ultimaOrigemClientes).includes("nuvem");
-  if(!origemNuvem || !id){ renderDetalhesCliente(resumo); return; }
+  if(!origemNuvem || !id){ renderDetalhesCliente({ ...resumo, _origem_nuvem:false }); return; }
 
   setStatus("Carregando dados completos do cliente...", "warn");
   try{
@@ -577,7 +748,7 @@ async function abrirDadosCliente(indice){
     const resp = await fetch(`${API_URL}/api/${recurso}/${id}`, { headers:{ "Authorization":`Bearer ${token}` } });
     const dados = await resp.json().catch(() => ({}));
     if(!resp.ok) throw new Error(dados.error || "Não foi possível consultar o cliente.");
-    renderDetalhesCliente({ ...dados, tipo_origem: resumo.tipo_origem || dados.tipo_origem });
+    renderDetalhesCliente({ ...resumo, ...dados, tipo_origem: resumo.tipo_origem || dados.tipo_origem, _origem_nuvem:true });
     setStatus("Dados completos do cliente carregados.", "ok");
   }catch(err){ setStatus(err.message, "err"); }
 }
@@ -613,18 +784,24 @@ document.getElementById("btnCopiarBoleto").addEventListener("click", ()=>{
   const d = clienteDetalhado; if(!d) return;
   copiarTexto([`Cliente: ${d.nomeFantasia !== "Não informado" ? d.nomeFantasia : d.razaoSocial}`, `CNPJ/CPF: ${documentoDetalhe(d)}`, `Endereço: ${d.endereco}`, `Número: ${d.numero}`, `Bairro: ${d.bairro}`, `Cidade/UF: ${cidadeUf(d)}`, `CEP: ${d.cep}`, `Telefone: ${d.telefone}`, `E-mail: ${d.email}`].join("\n"));
 });
+document.getElementById("btnEditarCliente").addEventListener("click", iniciarEdicaoCliente);
+document.getElementById("btnCancelarEdicao").addEventListener("click", ()=>{
+  restaurarModoNovoCadastro(true);
+  setStatus("Edição cancelada. O formulário voltou ao modo de novo cadastro.", "ok");
+});
 document.getElementById("btnFecharModal").addEventListener("click", fecharDadosCliente);
 document.getElementById("modalCliente").addEventListener("click", e=>{ if(e.target.id === "modalCliente") fecharDadosCliente(); });
 document.addEventListener("keydown", e=>{ if(e.key === "Escape") fecharDadosCliente(); });
 
-async function listarClientes(origem="local", documentoFiltro=null){
+async function listarClientes(origem="local", documentoFiltro=null, sequencia=pesquisaSequencia){
   let lista = await db.clientes.toArray();
+  if(sequencia !== pesquisaSequencia) return;
   if(documentoFiltro) lista = lista.filter(c => String(c.documento || c.cnpj || c.cpf || "") === String(documentoFiltro));
   lista.sort((a,b)=>(b.id||0)-(a.id||0));
   await renderClientes(lista, "clientes locais deste aparelho");
 }
 
-async function listarClientesNuvem(){
+async function listarClientesNuvem(sequencia=pesquisaSequencia){
   if(!token){ setStatus("Sem token. Faça login novamente.", "err"); return; }
   setStatus("Buscando clientes na nuvem...", "warn");
   try{
@@ -642,11 +819,35 @@ async function listarClientesNuvem(){
     const clientesFormais = Array.isArray(dataClientes) ? dataClientes.map(c => ({ ...c, tipo_origem:"cliente" })) : [];
     const clientesAvulsos = Array.isArray(dataAvulsos) ? dataAvulsos.map(c => ({ ...c, tipo_origem:"avulso" })) : [];
     const data = [...clientesFormais, ...clientesAvulsos];
+    if(sequencia !== pesquisaSequencia) return;
     setStatus("Clientes da nuvem carregados.", "ok");
     await renderClientes(data, "clientes da nuvem");
   }catch(err){
+    if(sequencia !== pesquisaSequencia) return;
     setStatus("Não foi possível listar clientes da nuvem: " + err.message, "err");
   }
+}
+
+function filtrosBuscaAtivos(){
+  return !!(
+    document.getElementById("filtroCidade").value.trim() ||
+    document.getElementById("filtroStatusComercial").value ||
+    document.getElementById("filtroStatusCliente").value
+  );
+}
+
+function executarPesquisaClientes(){
+  clearTimeout(buscaDinamicaTimer);
+  const tamanhoBusca = document.getElementById("buscaTexto").value.trim().length;
+  if((tamanhoBusca > 0 && tamanhoBusca < 3) || (tamanhoBusca === 0 && !filtrosBuscaAtivos())){
+    ocultarResultadosClientes();
+    return;
+  }
+
+  const sequencia = ++pesquisaSequencia;
+  pesquisaExecutada = true;
+  const origem = document.getElementById("filtroOrigem").value;
+  if(origem === "nuvem") listarClientesNuvem(sequencia); else listarClientes("local", null, sequencia);
 }
 
 async function sincronizar(){
@@ -700,27 +901,36 @@ async function limparDadosLocaisTeste(){
   await listarClientes();
 }
 
-document.getElementById("btnListar").addEventListener("click", ()=>listarClientes());
-document.getElementById("btnListarNuvem").addEventListener("click", listarClientesNuvem);
+document.getElementById("btnListar").addEventListener("click", ()=>{ mostrarAreaClientes("localizar"); listarClientes(); });
+document.getElementById("btnListarNuvem").addEventListener("click", ()=>{ mostrarAreaClientes("localizar"); listarClientesNuvem(); });
 document.getElementById("btnSincronizar").addEventListener("click", sincronizar);
 document.getElementById("btnLimparLocal").addEventListener("click", limparDadosLocaisTeste);
-document.getElementById("btnAplicarBusca").addEventListener("click", ()=>{
-  const origem = document.getElementById("filtroOrigem").value;
-  if(origem === "nuvem") listarClientesNuvem(); else listarClientes();
-});
+document.getElementById("btnAplicarBusca").addEventListener("click", executarPesquisaClientes);
 document.getElementById("btnLimparBusca").addEventListener("click", ()=>{
+  clearTimeout(buscaDinamicaTimer);
   document.getElementById("buscaTexto").value = "";
   document.getElementById("filtroCidade").value = "";
   document.getElementById("filtroStatusComercial").value = "";
   document.getElementById("filtroStatusCliente").value = "";
-  renderClientesFiltrados();
+  ocultarResultadosClientes();
 });
-["buscaTexto","filtroCidade","filtroStatusComercial","filtroStatusCliente"].forEach(id=>{
-  document.getElementById(id).addEventListener("input", renderClientesFiltrados);
-  document.getElementById(id).addEventListener("change", renderClientesFiltrados);
+document.getElementById("buscaTexto").addEventListener("input", ()=>{
+  clearTimeout(buscaDinamicaTimer);
+  ocultarResultadosClientes();
+  if(document.getElementById("buscaTexto").value.trim().length < 3) return;
+  const sequenciaAgendada = pesquisaSequencia;
+  buscaDinamicaTimer = setTimeout(()=>{
+    if(sequenciaAgendada !== pesquisaSequencia) return;
+    executarPesquisaClientes();
+  }, 275);
+});
+["filtroCidade","filtroStatusComercial","filtroStatusCliente"].forEach(id=>{
+  document.getElementById(id).addEventListener("input", ocultarResultadosClientes);
+  document.getElementById(id).addEventListener("change", ocultarResultadosClientes);
 });
 document.getElementById("filtroOrigem").addEventListener("change", function(){
-  if(this.value === "nuvem") listarClientesNuvem(); else listarClientes();
+  clearTimeout(buscaDinamicaTimer);
+  ocultarResultadosClientes();
 });
 document.getElementById("btnSair").addEventListener("click", ()=>{
   localStorage.removeItem("token");
@@ -730,7 +940,7 @@ document.getElementById("btnSair").addEventListener("click", ()=>{
   window.location.href = "login.html";
 });
 window.addEventListener("online", sincronizar);
-listarClientesNuvem().catch(()=>listarClientes());
+mostrarAreaClientes("localizar", false);
 </script>
 </body>
 </html>

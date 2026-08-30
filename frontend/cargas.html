@@ -10,7 +10,8 @@
   <style>
     *{box-sizing:border-box;margin:0;padding:0}body{font-family:'Segoe UI',system-ui,sans-serif;background:#f6f1e8;color:#432818;padding:16px;min-height:100vh}.wrap{max-width:1100px;margin:auto}.top,.panel{background:#fff;border-radius:24px;padding:20px;box-shadow:0 12px 28px rgba(67,40,24,.09);margin-bottom:16px}.brand{display:flex;align-items:center;gap:14px}.logo{width:76px;height:76px;object-fit:contain}h1{font-size:25px;color:#78350f}h2{font-size:19px;color:#78350f;margin-bottom:13px}h3{font-size:16px;color:#78350f;margin-bottom:9px}.sub{color:#9a3412;margin-top:4px}.user{margin-top:12px;color:#7c2d12;font-size:13px}.status{padding:12px;border-radius:15px;margin-bottom:14px;background:#fef3c7;color:#92400e}.status.ok{background:#d1fae5;color:#065f46}.status.err{background:#fee2e2;color:#991b1b}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.field{margin-bottom:13px}label{display:block;font-size:12px;font-weight:800;color:#7c2d12;margin:0 0 6px 7px}input,select,textarea{width:100%;border:2px solid #fcd8af;border-radius:17px;padding:11px 13px;background:#fff;font-size:14px}textarea{min-height:75px;resize:vertical}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}button,.button{border:0;border-radius:999px;padding:12px 18px;font-weight:850;cursor:pointer;text-decoration:none;text-align:center}.primary{background:#ea580c;color:#fff}.secondary{background:#fed7aa;color:#7c2d12}.muted{background:#e7e5e4;color:#44403c}.danger{background:#fee2e2;color:#991b1b}button:disabled{opacity:.5;cursor:not-allowed}.note{line-height:1.45;color:#7c2d12;font-size:13px}.warning{background:#fef3c7;border-radius:16px;padding:12px;color:#92400e;margin-top:12px}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}.metric{background:#fff7ed;border:1px solid #fed7aa;border-radius:17px;padding:13px}.metric span{display:block;font-size:11px;color:#9a3412}.metric strong{display:block;color:#78350f;font-size:18px;margin-top:4px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:780px}th,td{text-align:left;padding:11px;border-bottom:1px solid #f3e3d1}th{font-size:11px;text-transform:uppercase;color:#7c2d12}.produto-select{min-width:245px}.quantidade{width:125px}.saldo{font-weight:850;white-space:nowrap}.insuficiente{color:#b91c1c}.filtros{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.confirmacao{display:flex;gap:10px;align-items:flex-start;background:#fff7ed;border:2px solid #fed7aa;border-radius:17px;padding:14px;margin-top:14px}.confirmacao input{width:22px;height:22px;flex:0 0 auto}.confirmacao label{font-size:14px;margin:1px 0 0}.detail{background:#fff7ed;border-radius:16px;padding:14px;margin-top:14px}.empty{text-align:center;padding:28px;color:#78716c}
     .modal{position:fixed;inset:0;background:rgba(30,15,7,.58);display:none;align-items:center;justify-content:center;padding:16px;z-index:30}.modal.open{display:flex}.modal-card{background:#fff;border-radius:24px;padding:22px;width:min(900px,100%);max-height:92vh;overflow:auto}.modal-card.small{width:min(560px,100%)}.timeline{display:grid;gap:10px;margin-top:12px}.evento{background:#fff;border:1px solid #fed7aa;border-radius:15px;padding:12px}.evento.estorno{border-color:#fecaca;background:#fff1f2}.evento-top{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}.evento ul{margin:8px 0 0 18px}.tag{display:inline-block;border-radius:999px;padding:4px 8px;font-size:11px;font-weight:850;background:#fed7aa;color:#7c2d12}.tag.cancelada{background:#fee2e2;color:#991b1b}
-    @media(max-width:680px){body{padding:10px}.top,.panel{padding:16px;border-radius:20px}.logo{width:60px;height:60px}.grid,.filtros,.summary{grid-template-columns:1fr}.actions>*{flex:1 1 100%}}
+    [hidden]{display:none!important}.workspace-switch{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}.workspace-tab{background:#fff;border:2px solid #fed7aa;color:#7c2d12}.workspace-tab[aria-selected="true"]{background:#ea580c;border-color:#ea580c;color:#fff}
+    @media(max-width:680px){body{padding:10px}.top,.panel{padding:16px;border-radius:20px}.logo{width:60px;height:60px}.grid,.filtros,.summary{grid-template-columns:1fr}.actions>*{flex:1 1 100%}.workspace-switch{gap:8px}.workspace-tab{padding:12px 8px;font-size:13px}}
   </style>
 </head>
 <body>
@@ -18,7 +19,12 @@
   <section class="top"><div class="brand"><img src="images/logo-vm-gestao.png" class="logo" alt="Vovó Maria"><div><h1>Carga do Vendedor</h1><div class="sub">Separação e auditoria física em fardos</div></div></div><div id="userInfo" class="user"></div><div class="actions"><a class="button muted" href="dashboard.html">Voltar ao Dashboard</a><a class="button secondary" href="estoque.html">Estoque Central</a></div></section>
   <div id="status" class="status">Carregando vendedores e Estoque Central...</div>
 
-  <section class="panel">
+  <nav class="workspace-switch" role="tablist" aria-label="Áreas da Carga do Vendedor">
+    <button type="button" class="workspace-tab" id="abaPrepararCarga" role="tab" aria-selected="true" aria-controls="painelPrepararCarga">Preparar carga</button>
+    <button type="button" class="workspace-tab" id="abaConsultarCargas" role="tab" aria-selected="false" aria-controls="painelConsultarCargas" tabindex="-1">Consultar cargas</button>
+  </nav>
+
+  <section class="panel" id="painelPrepararCarga" role="tabpanel" aria-labelledby="abaPrepararCarga">
     <h2>Preparar nova carga</h2>
     <p class="note">Confira fisicamente cada produto antes de registrar. A transferência retira fardos do Estoque Central e os adiciona ao local do vendedor.</p>
     <form id="cargaForm" style="margin-top:14px">
@@ -36,7 +42,7 @@
     </form>
   </section>
 
-  <section class="panel">
+  <section class="panel" id="painelConsultarCargas" role="tabpanel" aria-labelledby="abaConsultarCargas" hidden>
     <h2>Histórico das cargas</h2>
     <div class="filtros"><div><label for="filtroVendedor">Vendedor</label><select id="filtroVendedor"><option value="">Todos</option></select></div><div><label for="filtroInicio">Data inicial</label><input id="filtroInicio" type="date"></div><div><label for="filtroFim">Data final</label><input id="filtroFim" type="date"></div></div>
     <div class="actions"><button type="button" class="secondary" id="btnFiltrar">Aplicar filtros</button><button type="button" class="muted" id="btnLimpar">Limpar</button></div>
@@ -67,6 +73,8 @@ if(!token)location.href="login.html";if(role!=="admin"&&role!=="operacao"){alert
 document.getElementById("userInfo").textContent=`${nome} · ${role==="admin"?"Administrador":"Operação"}`;
 const partes=Object.fromEntries(new Intl.DateTimeFormat("en-US",{timeZone:"America/Cuiaba",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date()).filter(p=>p.type!=="literal").map(p=>[p.type,p.value]));document.getElementById("dataCarga").value=`${partes.year}-${partes.month}-${partes.day}`;
 let vendedores=[],produtos=[],chaveAtual=novaChave(),sequencia=0,enviando=false,cargaEmAcao=null,chaveComplementoAtual="",complementoEnviando=false,cancelamentoEnviando=false,conferenciaEmAcao=null,chaveConferenciaAtual="",conferenciaEnviando=false,fechamentoEmAcao=null,chaveFechamentoAtual="",fechamentoEnviando=false,fechamentoBloqueado=false;
+function mostrarAreaCarga(area){const consultar=area==="consultar",abaPreparar=document.getElementById("abaPrepararCarga"),abaConsultar=document.getElementById("abaConsultarCargas");document.getElementById("painelPrepararCarga").hidden=consultar;document.getElementById("painelConsultarCargas").hidden=!consultar;abaPreparar.setAttribute("aria-selected",String(!consultar));abaConsultar.setAttribute("aria-selected",String(consultar));abaPreparar.tabIndex=consultar?-1:0;abaConsultar.tabIndex=consultar?0:-1}
+document.getElementById("abaPrepararCarga").onclick=()=>mostrarAreaCarga("preparar");document.getElementById("abaConsultarCargas").onclick=()=>mostrarAreaCarga("consultar");
 function novaChave(){return crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random().toString(16).slice(2)}`}
 function escapar(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function numero(v){return Number(v||0).toLocaleString("pt-BR",{maximumFractionDigits:3})}
