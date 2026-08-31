@@ -62,7 +62,13 @@ function obterDataLocalCuiaba(instante = new Date()) {
 function filtroRegistroTeste(alias = "v", somenteTeste = false) {
   const texto = `LOWER(' ' || COALESCE(${alias}.observacoes, '') || ' ')`;
   const contemPalavraTeste = `${texto} GLOB '*[^0-9a-z_]teste[^0-9a-z_]*'`;
-  return somenteTeste ? contemPalavraTeste : `NOT (${contemPalavraTeste})`;
+  const pertenceAoLoginTeste = `EXISTS (
+    SELECT 1 FROM vendedores vendedor_teste
+    WHERE vendedor_teste.id = ${alias}.vendedor_id
+      AND LOWER(TRIM(vendedor_teste.email)) = 'testevenda@vovomaria.com'
+  )`;
+  const registroTeste = `(${contemPalavraTeste} OR ${pertenceAoLoginTeste})`;
+  return somenteTeste ? registroTeste : `NOT ${registroTeste}`;
 }
 
 async function jwtSign(payload) {
