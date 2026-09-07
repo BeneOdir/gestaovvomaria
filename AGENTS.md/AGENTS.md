@@ -127,6 +127,55 @@ Possíveis riscos.
 
 ---
 
+## INFRAESTRUTURA OFICIAL — REFERÊNCIA OBRIGATÓRIA
+
+Mapa Oficial aprovado em 07/09/2026 e incorporado à governança permanente
+do projeto Gestão Vovó Maria.
+
+| Componente | Identificação oficial |
+|---|---|
+| Conta Cloudflare | `09958c43690f7710434df44b33c1a13f` |
+| Repositório | `BeneOdir/gestaovvomaria` |
+| Pages oficial | `gestaovvomaria` |
+| Frontend oficial | `https://gestaovvomaria.pages.dev` |
+| Diretório publicado | `frontend` |
+| Worker oficial | `gestaovomaria-api` |
+| API oficial | `https://gestaovomaria-api.odir-bene12.workers.dev` |
+| Binding D1 | `DB` |
+| D1 oficial | `gestaovovomaria-db` |
+| UUID obrigatório | `2f0bf025-6686-410c-a6d7-a720668d8ff2` |
+
+### Regras obrigatórias de identificação e intervenção
+
+1. Antes de qualquer migration, escrita remota ou deploy envolvendo D1,
+   confirmar que o binding e o banco de destino resolvem para o UUID obrigatório
+   `2f0bf025-6686-410c-a6d7-a720668d8ff2`.
+2. O UUID prevalece sobre nomes semelhantes ou registros históricos.
+3. Nomes semelhantes nunca são evidência suficiente para identificar um recurso.
+4. Versões e deployments são estado operacional: devem ser conferidos no momento
+   de cada intervenção e não congelados como identificadores permanentes.
+5. Recursos em quarentena não podem receber novos desenvolvimentos, migrations,
+   deploys, alterações ou exclusões sem autorização específica.
+6. Recursos de outros projetos Cloudflare não fazem parte da Gestão Vovó Maria
+   e não devem ser tocados.
+
+### Quarentena de recursos não oficiais
+
+| Recurso | Identificação | Classificação obrigatória |
+|---|---|---|
+| D1 | `gestaovovomaria_db` — UUID `5143b476-9d2f-4163-b880-a525a64352e5` | **QUARENTENA/MANTER POR SEGURANÇA** |
+| Worker | `gestaovovomaria-api` | **QUARENTENA/MANTER POR SEGURANÇA** |
+| Worker | `gestaovvomaria-api` | **QUARENTENA/INVESTIGAR** |
+| Worker | `gestaovovomaria` | **QUARENTENA/INVESTIGAR** |
+
+### Precedência sobre registros históricos
+
+Os registros históricos existentes são preservados como evidência de seu
+respectivo momento. Referências históricas de versões, nomes ou deployments
+**não substituem este Mapa Oficial** nem autorizam o uso de outro destino.
+Em caso de divergência, aplicar esta referência obrigatória e conferir a
+identidade atual do recurso antes de qualquer intervenção.
+
 ## Infraestrutura oficial — Gestão Vovó Maria
 
 - Repositório GitHub: `BeneOdir/gestaovvomaria`
