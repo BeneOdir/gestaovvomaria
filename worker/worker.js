@@ -1089,6 +1089,195 @@ async function criarVenda(request, env, user) {
 // Comissão estimada por fardo. Este é o único valor a alterar quando a regra comercial mudar.
 const COMISSAO_POR_FARDO = 1.75;
 
+function dataIsoRealValida(valor) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(valor)) return false;
+  const [ano, mes, dia] = valor.split("-").map(Number);
+  const data = new Date(Date.UTC(ano, mes - 1, dia));
+  return data.getUTCFullYear() === ano && data.getUTCMonth() === mes - 1 && data.getUTCDate() === dia;
+}
+
+function diasEntreDatasIso(inicial, final) {
+  const [anoInicial, mesInicial, diaInicial] = inicial.split("-").map(Number);
+  const [anoFinal, mesFinal, diaFinal] = final.split("-").map(Number);
+  return Math.max(0, Math.floor((Date.UTC(anoFinal, mesFinal - 1, diaFinal)
+    - Date.UTC(anoInicial, mesInicial - 1, diaInicial)) / 86400000));
+}
+
+function decodificarCursorHistorico(cursor) {
+  if (!cursor) return null;
+  try {
+    const dados = JSON.parse(atob(cursor));
+    const id = Number(dados?.id);
+    if (!dataIsoRealValida(dados?.data || "") || !Number.isInteger(id) || id <= 0) return null;
+    return { data: dados.data, id };
+  } catch {
+    return null;
+  }
+}
+
+function codificarCursorHistorico(venda) {
+  return btoa(JSON.stringify({ data: venda.data_visita, id: Number(venda.id) }));
+}
+
+async function historicoComercialCliente(request, env, user, tipo, id) {
+  if (!usuarioTemRole(user, "admin", "vendedor")) return acessoNegado();
+  if (!new Set(["formal", "avulso"]).has(tipo)) return json({ error: "Tipo de cliente inválido. Use formal ou avulso." }, 400);
+  if (!Number.isInteger(id) || id <= 0) return json({ error: "ID de cliente inválido." }, 400);
+
+  const url = new URL(request.url);
+  const dataInicial = normalizeText(url.searchParams.get("data_inicial"));
+  const dataFinal = normalizeText(url.searchParams.get("data_final"));
+  if (!dataInicial || !dataFinal) return json({ error: "data_inicial e data_final são obrigatórias." }, 400);
+  if (!dataIsoRealValida(dataInicial) || !dataIsoRealValida(dataFinal)) {
+    return json({ error: "Período inválido. Use datas reais no formato AAAA-MM-DD." }, 400);
+  }
+  if (dataInicial > dataFinal) return json({ error: "A data inicial deve ser anterior ou igual à data final." }, 400);
+
+  const limiteInformado = normalizeText(url.searchParams.get("limite"));
+  const limite = limiteInformado ? Number(limiteInformado) : 50;
+  if (!Number.isInteger(limite) || limite < 1 || limite > 100) return json({ error: "limite deve ser um inteiro entre 1 e 100." }, 400);
+  const cursorInformado = normalizeText(url.searchParams.get("cursor"));
+  const cursor = decodificarCursorHistorico(cursorInformado);
+  if (cursorInformado && !cursor) return json({ error: "Cursor inválido." }, 400);
+
+  const cliente = tipo === "formal"
+    ? await env.DB.prepare(`SELECT id, tipo_pessoa, documento, cnpj, cpf, razao_social,
+        nome_estabelecimento, nome_fantasia, telefone, whatsapp, cidade, estado,
+        status_comercial, status_cliente FROM clientes WHERE id = ?`).bind(id).first()
+    : await env.DB.prepare(`SELECT id, tipo_pessoa, cpf, cnpj, nome_estabelecimento,
+        telefone, whatsapp, cidade, estado, status_cadastro
+      FROM clientes_avulsos WHERE id = ?`).bind(id).first();
+  if (!cliente) return json({ error: "Cliente não encontrado." }, 404);
+
+  const filtroIdentidade = tipo === "formal"
+    ? "v.cliente_id = ? AND v.cliente_avulso_id IS NULL"
+    : "v.cliente_avulso_id = ? AND COALESCE(v.cliente_id, 0) = 0";
+  const filtroVendedor = user.role === "vendedor" ? " AND v.vendedor_id = ?" : "";
+  const filtroOficial = `v.comprou = 'sim' AND v.status_registro = 'ATIVA' AND ${filtroRegistroTeste("v")}`;
+  const parametrosEscopo = user.role === "vendedor" ? [id, Number(user.vendedorId)] : [id];
+  const parametrosPeriodo = [dataInicial, dataFinal, ...parametrosEscopo];
+
+  const [resumo, ultimaCompra, produtos] = await Promise.all([
+    env.DB.prepare(`SELECT COUNT(*) AS quantidade_compras,
+        COALESCE(SUM(v.valor_total), 0) AS total_comprado,
+        COALESCE(SUM(v.valor_recebido), 0) AS recebido,
+        COALESCE(SUM(CASE WHEN v.valor_total > v.valor_recebido THEN v.valor_total - v.valor_recebido ELSE 0 END), 0) AS pendente
+      FROM visitas v WHERE v.data_visita BETWEEN ? AND ? AND ${filtroIdentidade}${filtroVendedor} AND ${filtroOficial}`)
+      .bind(...parametrosPeriodo).first(),
+    env.DB.prepare(`SELECT MAX(v.data_visita) AS ultima_compra FROM visitas v
+      WHERE ${filtroIdentidade}${filtroVendedor} AND ${filtroOficial}`).bind(...parametrosEscopo).first(),
+    env.DB.prepare(`SELECT vi.produto_id, vi.produto_nome,
+        COALESCE(SUM(vi.quantidade), 0) AS quantidade, COALESCE(SUM(vi.subtotal), 0) AS valor_total
+      FROM visita_itens vi INNER JOIN visitas v ON v.id = vi.visita_id
+      WHERE v.data_visita BETWEEN ? AND ? AND ${filtroIdentidade}${filtroVendedor} AND ${filtroOficial}
+      GROUP BY vi.produto_id, vi.produto_nome ORDER BY valor_total DESC, quantidade DESC, vi.produto_nome`)
+      .bind(...parametrosPeriodo).all()
+  ]);
+
+  let filtroCursor = "";
+  const parametrosVendas = [...parametrosPeriodo];
+  if (cursor) {
+    filtroCursor = " AND (v.data_visita < ? OR (v.data_visita = ? AND v.id < ?))";
+    parametrosVendas.push(cursor.data, cursor.data, cursor.id);
+  }
+  parametrosVendas.push(limite + 1);
+  const vendasConsulta = await env.DB.prepare(`SELECT v.id, v.data_visita, v.created_at, v.vendedor_id,
+      COALESCE(vd.nome, 'Vendedor') AS vendedor_nome, v.valor_total, v.valor_recebido,
+      CASE WHEN v.valor_total > v.valor_recebido THEN v.valor_total - v.valor_recebido ELSE 0 END AS pendente,
+      v.forma_pagamento, v.situacao_pagamento, v.desconto, v.observacoes
+    FROM visitas v LEFT JOIN vendedores vd ON vd.id = v.vendedor_id
+    WHERE v.data_visita BETWEEN ? AND ? AND ${filtroIdentidade}${filtroVendedor} AND ${filtroOficial}${filtroCursor}
+    ORDER BY v.data_visita DESC, v.id DESC LIMIT ?`).bind(...parametrosVendas).all();
+  const vendasBrutas = vendasConsulta.results || [];
+  const temMais = vendasBrutas.length > limite;
+  const pagina = vendasBrutas.slice(0, limite);
+  const idsPagina = pagina.map(venda => Number(venda.id));
+
+  let itens = [], pagamentos = [];
+  if (idsPagina.length) {
+    const marcadores = idsPagina.map(() => "?").join(",");
+    const resultados = await Promise.all([
+      env.DB.prepare(`SELECT id, visita_id, produto_id, produto_nome, quantidade,
+          preco_unitario, subtotal, item_ordem FROM visita_itens WHERE visita_id IN (${marcadores})
+        ORDER BY visita_id DESC, item_ordem, id`).bind(...idsPagina).all(),
+      env.DB.prepare(`SELECT id, visita_id, forma_pagamento, valor FROM visita_pagamentos
+        WHERE visita_id IN (${marcadores}) ORDER BY visita_id DESC, id`).bind(...idsPagina).all()
+    ]);
+    itens = resultados[0].results || [];
+    pagamentos = resultados[1].results || [];
+  }
+
+  const itensPorVenda = new Map(), pagamentosPorVenda = new Map();
+  for (const item of itens) {
+    const visitaId = Number(item.visita_id);
+    if (!itensPorVenda.has(visitaId)) itensPorVenda.set(visitaId, []);
+    itensPorVenda.get(visitaId).push({
+      item_id: Number(item.id), produto_id: item.produto_id === null ? null : Number(item.produto_id),
+      produto_nome: item.produto_nome, quantidade: Number(item.quantidade || 0),
+      preco_unitario: Number(item.preco_unitario || 0), subtotal: Number(item.subtotal || 0),
+      ordem: item.item_ordem === null ? null : Number(item.item_ordem)
+    });
+  }
+  for (const pagamento of pagamentos) {
+    const visitaId = Number(pagamento.visita_id);
+    if (!pagamentosPorVenda.has(visitaId)) pagamentosPorVenda.set(visitaId, []);
+    pagamentosPorVenda.get(visitaId).push({ forma: pagamento.forma_pagamento, valor: Number(pagamento.valor || 0) });
+  }
+
+  const vendas = pagina.map(venda => {
+    let formasPagamento = pagamentosPorVenda.get(Number(venda.id));
+    if (!formasPagamento?.length) {
+      const forma = venda.forma_pagamento || "não informado";
+      formasPagamento = [{ forma, valor: normalizeText(forma).toLowerCase() === "prazo"
+        ? Number(venda.pendente || 0) : Number(venda.valor_recebido || 0) }];
+    }
+    return {
+      visita_id: Number(venda.id), data: venda.data_visita, created_at: venda.created_at || null,
+      vendedor: { id: Number(venda.vendedor_id), nome: venda.vendedor_nome },
+      total: Number(venda.valor_total || 0), recebido: Number(venda.valor_recebido || 0),
+      pendente: Number(venda.pendente || 0), desconto: Number(venda.desconto || 0),
+      observacoes: venda.observacoes || null, situacao: venda.situacao_pagamento,
+      formas_pagamento: formasPagamento,
+      ticket: { tipo: "visita", id: Number(venda.id), disponivel: true },
+      produtos: itensPorVenda.get(Number(venda.id)) || []
+    };
+  });
+
+  const ultimaCompraIso = ultimaCompra?.ultima_compra || null;
+  const nome = tipo === "formal"
+    ? (cliente.nome_fantasia || cliente.razao_social || cliente.nome_estabelecimento || "Cliente")
+    : (cliente.nome_estabelecimento || "Cliente avulso");
+  return json({
+    periodo: { data_inicial: dataInicial, data_final: dataFinal },
+    escopo_autorizado: { perfil: user.role,
+      vendedor_id: user.role === "vendedor" ? Number(user.vendedorId) : null,
+      descricao: user.role === "vendedor" ? "vendas_do_vendedor_autenticado" : "historico_completo" },
+    identificacao: {
+      tipo, id: Number(cliente.id), nome,
+      razao_social: tipo === "formal" ? cliente.razao_social || null : null,
+      nome_fantasia: tipo === "formal" ? cliente.nome_fantasia || null : null,
+      nome_estabelecimento: cliente.nome_estabelecimento || null, tipo_pessoa: cliente.tipo_pessoa || null,
+      documento: tipo === "formal" ? cliente.documento || cliente.cnpj || cliente.cpf || null : cliente.cnpj || cliente.cpf || null,
+      cnpj: cliente.cnpj || null, cpf: cliente.cpf || null, telefone: cliente.telefone || null,
+      whatsapp: cliente.whatsapp || null, cidade: cliente.cidade || null, estado: cliente.estado || null,
+      situacao_cadastral: tipo === "formal"
+        ? { status_comercial: cliente.status_comercial || null, status_cliente: cliente.status_cliente || null, status_cadastro: null }
+        : { status_comercial: null, status_cliente: null, status_cadastro: cliente.status_cadastro || null }
+    },
+    resumo_periodo: { quantidade_compras: Number(resumo?.quantidade_compras || 0),
+      total_comprado: Number(resumo?.total_comprado || 0), recebido: Number(resumo?.recebido || 0),
+      pendente: Number(resumo?.pendente || 0) },
+    historico_completo: { ultima_compra: ultimaCompraIso,
+      dias_sem_comprar: ultimaCompraIso ? diasEntreDatasIso(ultimaCompraIso, obterDataLocalCuiaba()) : null,
+      escopo: user.role === "vendedor" ? "vendedor_autenticado" : "historico_completo" },
+    produtos_periodo: (produtos.results || []).map(produto => ({
+      produto_id: produto.produto_id === null ? null : Number(produto.produto_id), produto_nome: produto.produto_nome,
+      quantidade: Number(produto.quantidade || 0), valor_total: Number(produto.valor_total || 0) })),
+    vendas_periodo: { itens: vendas, paginacao: { limite,
+      proximo_cursor: temMais && vendas.length ? codificarCursorHistorico(vendasBrutas[limite - 1]) : null,
+      tem_mais: temMais } }
+  });
+}
 
 async function relatorioPeriodo(request, env, user, somenteTeste = false) {
   if (!usuarioTemRole(user, "admin", "vendedor")) return acessoNegado();
@@ -2111,7 +2300,7 @@ async function carregarLoteProducaoCompleto(env, identificador, porChave = false
     FROM producao_lote_produtos vinculo
     INNER JOIN produtos produto ON produto.id = vinculo.produto_id
     LEFT JOIN vendedores usuario ON usuario.id = vinculo.incluido_por
-    WHERE vinculo.lote_id = ?
+    WHERE vinculo.lote_id = ? AND vinculo.estado = 'ATIVO'
     ORDER BY vinculo.created_at, vinculo.id
   `).bind(lote.id).all();
   return { ...lote, itens, produtos_vinculados: vinculados.results || [] };
@@ -2415,7 +2604,7 @@ async function listarLotesProducao(request, env, user) {
   if (produtoId) {
     filtros.push(`(
       EXISTS (SELECT 1 FROM producao_registros filtro_registro WHERE filtro_registro.lote_id = lote.id AND filtro_registro.produto_id = ?)
-      OR EXISTS (SELECT 1 FROM producao_lote_produtos filtro_vinculo WHERE filtro_vinculo.lote_id = lote.id AND filtro_vinculo.produto_id = ?)
+      OR EXISTS (SELECT 1 FROM producao_lote_produtos filtro_vinculo WHERE filtro_vinculo.lote_id = lote.id AND filtro_vinculo.produto_id = ? AND filtro_vinculo.estado = 'ATIVO')
     )`);
     parametros.push(produtoId, produtoId);
   }
@@ -2430,7 +2619,7 @@ async function listarLotesProducao(request, env, user) {
       lote.fluxo, lote.status, lote.encerrado_em, lote.encerrado_por,
       lote.motivo_encerramento, lote.ambiente,
       COUNT(DISTINCT registro.produto_id) AS total_produtos,
-      (SELECT COUNT(*) FROM producao_lote_produtos vinculo WHERE vinculo.lote_id = lote.id) AS total_produtos_vinculados,
+      (SELECT COUNT(*) FROM producao_lote_produtos vinculo WHERE vinculo.lote_id = lote.id AND vinculo.estado = 'ATIVO') AS total_produtos_vinculados,
       COALESCE(SUM(registro.quantidade_fardos), 0) AS total_fardos,
       COALESCE(SUM(registro.quantidade_pacotes), 0) AS total_pacotes,
       COALESCE(SUM(registro.valor_producao), 0) AS valor_producao,
@@ -2471,9 +2660,9 @@ async function carregarVinculosAberturaV11(env, loteId, ambiente, chaveCliente) 
   const resultado = await env.DB.prepare(`
     SELECT produto_id, pacotes_por_fardo_snapshot, valor_por_pacote_snapshot
     FROM producao_lote_produtos
-    WHERE lote_id = ? AND chave_idempotencia LIKE ?
+    WHERE lote_id = ? AND chave_idempotencia = ? || CAST(produto_id AS TEXT)
     ORDER BY produto_id
-  `).bind(loteId, `LOTE_PRODUTO_ABERTURA:${ambiente}:${chaveCliente}:PRODUTO:%`).all();
+  `).bind(loteId, `LOTE_PRODUTO_ABERTURA:${ambiente}:${chaveCliente}:PRODUTO:`).all();
   return resultado.results || [];
 }
 
@@ -2726,7 +2915,7 @@ async function incluirProdutoLoteV11(request, env, user, loteId) {
     return json({ success: true, idempotente: true, vinculo: existente });
   }
   if (lote.fluxo !== "V1_1_GRADUAL" || lote.status !== "ABERTO") return json({ error: "Somente lotes V1.1 abertos aceitam novos produtos." }, 409);
-  const jaVinculado = await env.DB.prepare("SELECT id FROM producao_lote_produtos WHERE lote_id = ? AND produto_id = ?").bind(loteId, produtoId).first();
+  const jaVinculado = await env.DB.prepare("SELECT id FROM producao_lote_produtos WHERE lote_id = ? AND produto_id = ? AND estado = 'ATIVO'").bind(loteId, produtoId).first();
   if (jaVinculado) return json({ error: "O produto já está vinculado ao lote." }, 409);
   try {
     await env.DB.batch([env.DB.prepare(`
@@ -2751,6 +2940,43 @@ async function incluirProdutoLoteV11(request, env, user, loteId) {
   const vinculo = await env.DB.prepare("SELECT * FROM producao_lote_produtos WHERE chave_idempotencia = ?").bind(chave).first();
   if (!vinculo) return json({ error: "A inclusão do produto ficou incompleta. Solicite auditoria." }, 409);
   return json({ success: true, idempotente: false, vinculo }, 201);
+}
+
+async function retirarProdutoLoteV11(request, env, user, loteId, vinculoId) {
+  if (!acessoProducaoPermitido(user)) return acessoNegado();
+  if (!Number.isInteger(loteId) || loteId <= 0 || !Number.isInteger(vinculoId) || vinculoId <= 0) {
+    return json({ error: "Lote ou vínculo inválido." }, 400);
+  }
+  const dados = await request.json();
+  const contrato = normalizarAmbienteProducao(dados.ambiente, user);
+  if (contrato.resposta) return contrato.resposta;
+  const lote = await buscarLoteProducaoPorId(env, loteId);
+  if (!lote) return json({ error: "Lote não encontrado." }, 404);
+  if (lote.ambiente !== contrato.ambiente) return json({ error: "O lote pertence a outro ambiente de Produção." }, 409);
+  if (lote.fluxo !== "V1_1_GRADUAL" || lote.status !== "ABERTO") {
+    return json({ error: "Somente lotes V1.1 abertos aceitam retirada de produtos." }, 409);
+  }
+  // O ID identifica esta inclusão: uma repetição nunca retira uma reinclusão.
+  // As condições são verificadas na escrita, inclusive contra lançamento concorrente.
+  const vinculo = await env.DB.prepare(`
+    UPDATE producao_lote_produtos
+    SET estado = 'RETIRADO', retirado_por = ?, retirado_em = CURRENT_TIMESTAMP,
+      motivo_retirada = 'PRODUTO_INCLUIDO_POR_ENGANO'
+    WHERE id = ? AND lote_id = ? AND estado = 'ATIVO'
+      AND EXISTS (
+        SELECT 1 FROM producao_lotes lote
+        WHERE lote.id = producao_lote_produtos.lote_id AND lote.ambiente = ?
+          AND lote.fluxo = 'V1_1_GRADUAL' AND lote.status = 'ABERTO'
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM producao_registros registro
+        WHERE registro.lote_id = producao_lote_produtos.lote_id
+          AND registro.produto_id = producao_lote_produtos.produto_id
+      )
+    RETURNING *
+  `).bind(user.vendedorId, vinculoId, loteId, contrato.ambiente).first();
+  if (!vinculo) return json({ error: "Retirada bloqueada: o vínculo deve estar ativo, sem qualquer lançamento, em lote V1.1 aberto." }, 409);
+  return json({ success: true, vinculo });
 }
 
 async function auditarEntradaLancamentoV11(env, registroId) {
@@ -2832,7 +3058,7 @@ async function registrarLancamentoLoteV11(request, env, user, loteId) {
     return json({ success: true, idempotente: true, lancamento: auditoria });
   }
   if (lote.fluxo !== "V1_1_GRADUAL" || lote.status !== "ABERTO") return json({ error: "Somente lotes V1.1 abertos aceitam lançamentos." }, 409);
-  const vinculo = await env.DB.prepare("SELECT id FROM producao_lote_produtos WHERE lote_id = ? AND produto_id = ?").bind(loteId, produtoId).first();
+  const vinculo = await env.DB.prepare("SELECT id FROM producao_lote_produtos WHERE lote_id = ? AND produto_id = ? AND estado = 'ATIVO'").bind(loteId, produtoId).first();
   if (!vinculo) return json({ error: "O produto não está vinculado ao lote." }, 409);
   const statements = [
     env.DB.prepare(`
@@ -2850,7 +3076,7 @@ async function registrarLancamentoLoteV11(request, env, user, loteId) {
         ROUND(? * vinculo.pacotes_por_fardo_snapshot * vinculo.valor_por_pacote_snapshot, 2),
         ?, ?, CURRENT_TIMESTAMP, 1, ?
       FROM producao_lotes lote
-      INNER JOIN producao_lote_produtos vinculo ON vinculo.lote_id = lote.id AND vinculo.produto_id = ?
+      INNER JOIN producao_lote_produtos vinculo ON vinculo.lote_id = lote.id AND vinculo.produto_id = ? AND vinculo.estado = 'ATIVO'
       WHERE lote.id = ? AND lote.ambiente = ? AND lote.fluxo = 'V1_1_GRADUAL' AND lote.status = 'ABERTO'
     `).bind(user.vendedorId, dataMontagem, quantidadeFardos, quantidadeFardos, quantidadeFardos, observacao, chave, ambiente, produtoId, loteId, ambiente),
   ];
@@ -3255,6 +3481,44 @@ async function listarVendedoresCarga(env, user) {
   return json(resultado.results || []);
 }
 
+async function residuosLocalCarga(env, localId) {
+  const fardos = await env.DB.prepare(`
+    SELECT m.produto_id, p.nome AS produto_nome,
+      SUM(m.quantidade * m.efeito) AS quantidade
+    FROM estoque_movimentacoes m
+    INNER JOIN produtos p ON p.id = m.produto_id
+    WHERE m.local_id = ?
+    GROUP BY m.produto_id, p.nome
+    HAVING SUM(m.quantidade * m.efeito) <> 0
+  `).bind(localId).all();
+  const pacotes = await env.DB.prepare(`
+    SELECT m.produto_id, p.nome AS produto_nome, m.bucket,
+      SUM(m.quantidade_pacotes * m.efeito) AS quantidade
+    FROM estoque_pacote_movimentacoes m
+    INNER JOIN estoque_pacote_operacoes o ON o.id = m.operacao_id
+    INNER JOIN produtos p ON p.id = m.produto_id
+    WHERE COALESCE(m.local_id, m.local_carga_id) = ?
+      AND o.status IN ('CONFIRMADA','ESTORNADA')
+      AND m.bucket IN ('FRACIONADO_NOVO','RETORNO_TROCA','DESCARTE_PENDENTE')
+    GROUP BY m.produto_id, p.nome, m.bucket
+    HAVING SUM(m.quantidade_pacotes * m.efeito) <> 0
+  `).bind(localId).all();
+  const residuos = (fardos.results || []).map(item => ({
+    produto_id: Number(item.produto_id), produto_nome: item.produto_nome,
+    tipo: "FARDOS", quantidade: Number(item.quantidade), local_id: Number(localId),
+  }));
+  const tipos = {
+    FRACIONADO_NOVO: "FRACIONADO_NOVO",
+    RETORNO_TROCA: "RETORNO_TROCA",
+    DESCARTE_PENDENTE: "DESCARTE_PENDENTE",
+  };
+  for (const item of pacotes.results || []) residuos.push({
+    produto_id: Number(item.produto_id), produto_nome: item.produto_nome,
+    tipo: tipos[item.bucket], quantidade: Number(item.quantidade), local_id: Number(localId),
+  });
+  return residuos;
+}
+
 async function carregarCargaCompleta(env, cargaId) {
   const carga = await env.DB.prepare(`
     SELECT carga.id, carga.data_carga, carga.vendedor_id,
@@ -3553,6 +3817,19 @@ async function registrarCargaVendedor(request, env, user) {
   const cargaAberta = await env.DB.prepare("SELECT id FROM estoque_cargas WHERE vendedor_id = ? AND status = 'ABERTA'").bind(vendedorId).first();
   if (cargaAberta) return json({ error: "O vendedor já possui uma carga aberta.", carga_id: cargaAberta.id }, 409);
 
+  const localCarga = await env.DB.prepare(`
+    SELECT id FROM estoque_locais
+    WHERE tipo = 'CARGA_VENDEDOR' AND vendedor_id = ? AND ativo = 1
+    LIMIT 1
+  `).bind(vendedorId).first();
+  if (localCarga) {
+    const residuos = await residuosLocalCarga(env, Number(localCarga.id));
+    if (residuos.length) return json({
+      error: "Não é possível abrir nova carga: o local do vendedor possui saldo residual.",
+      local_id: Number(localCarga.id), residuos,
+    }, 409);
+  }
+
   const statements = [
     env.DB.prepare(`
       INSERT OR IGNORE INTO estoque_locais (nome, tipo, vendedor_id, ativo, created_at, updated_at)
@@ -3567,6 +3844,22 @@ async function registrarCargaVendedor(request, env, user) {
       INNER JOIN estoque_locais local ON local.vendedor_id = vendedor.id
         AND local.tipo = 'CARGA_VENDEDOR' AND local.ativo = 1
       WHERE vendedor.id = ? AND vendedor.role = 'vendedor' AND vendedor.status = 'ativo'
+        AND NOT EXISTS (
+          SELECT 1 FROM estoque_movimentacoes saldo
+          WHERE saldo.local_id = local.id
+          GROUP BY saldo.produto_id
+          HAVING SUM(saldo.quantidade * saldo.efeito) <> 0
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM estoque_pacote_movimentacoes saldo
+          INNER JOIN estoque_pacote_operacoes pacote ON pacote.id = saldo.operacao_id
+          WHERE COALESCE(saldo.local_id, saldo.local_carga_id) = local.id
+            AND pacote.status IN ('CONFIRMADA','ESTORNADA')
+            AND saldo.bucket IN ('FRACIONADO_NOVO','RETORNO_TROCA','DESCARTE_PENDENTE')
+          GROUP BY saldo.produto_id, saldo.bucket
+          HAVING SUM(saldo.quantidade_pacotes * saldo.efeito) <> 0
+        )
     `).bind(dataCarga, user.vendedorId, observacoesAbertura, vendedorId),
   ];
   for (const item of itens) statements.push(env.DB.prepare(`
@@ -4161,11 +4454,46 @@ function auditoriaFechamentoCarga(cargaId, itens, observacao, confirmacaoFisica,
   return {
     carga_id: Number(cargaId),
     itens: [...itens].sort((a, b) => a.produtoId - b.produtoId)
-      .map(item => ({ produto_id: item.produtoId, quantidade_fisica: item.quantidadeFisica })),
+      .map(item => ({ produto_id: item.produtoId, quantidade_fisica: item.quantidadeFisica,
+        quantidade_pacotes_bons: item.quantidadePacotesBonsFisica,
+        quantidade_retorno_troca: item.quantidadeRetornoTrocaFisica })),
     observacao: normalizeText(observacao),
     confirmacao_fisica: confirmacaoFisica === true,
     confirmacao_texto: normalizeText(confirmacaoTexto).toUpperCase(),
   };
+}
+
+async function auditarRetornosPacoteFechamento(env, cargaId, chaveCliente, itens, localCargaId, centralId) {
+  for (const item of itens) {
+    for (const [bucket, quantidade] of [
+      ["FRACIONADO_NOVO", item.quantidadePacotesBonsFisica],
+      ["RETORNO_TROCA", item.quantidadeRetornoTrocaFisica],
+    ]) {
+      if (quantidade <= 0) continue;
+      const chave = `RETORNO_CARGA_PACOTE:${cargaId}:${item.produtoId}:${bucket}:${chaveCliente}`;
+      const operacao = await env.DB.prepare(`SELECT id,status,tipo,carga_id,local_carga_id,produto_id,quantidade_pacotes
+        FROM estoque_pacote_operacoes WHERE chave_idempotencia=?`).bind(chave).first();
+      if (!operacao || operacao.status !== "CONFIRMADA" || operacao.tipo !== "RETORNO_CARGA_PACOTE"
+        || Number(operacao.carga_id) !== Number(cargaId) || Number(operacao.local_carga_id) !== Number(localCargaId)
+        || Number(operacao.produto_id) !== Number(item.produtoId) || Number(operacao.quantidade_pacotes) !== Number(quantidade)) {
+        return `Retorno de pacote ausente ou incompatível para ${bucket} do produto #${item.produtoId}.`;
+      }
+      const movimentos = await env.DB.prepare(`SELECT m.bucket,m.quantidade_pacotes,m.efeito,m.carga_id,
+          COALESCE(m.local_id,m.local_carga_id) AS local_id,l.tipo AS local_tipo
+        FROM estoque_pacote_movimentacoes m INNER JOIN estoque_locais l ON l.id=COALESCE(m.local_id,m.local_carga_id)
+        WHERE m.operacao_id=? ORDER BY m.id`).bind(operacao.id).all();
+      const rows = movimentos.results || [];
+      if (rows.length !== 2 || !rows.some(row => row.bucket === bucket && Number(row.efeito) === -1
+        && Number(row.quantidade_pacotes) === Number(quantidade) && Number(row.local_id) === Number(localCargaId)
+        && row.local_tipo === "CARGA_VENDEDOR" && Number(row.carga_id) === Number(cargaId))
+        || !rows.some(row => row.bucket === bucket && Number(row.efeito) === 1
+          && Number(row.quantidade_pacotes) === Number(quantidade) && row.local_tipo === "CENTRAL"
+          && Number(row.carga_id) === Number(cargaId))) {
+        return `Movimentos de retorno incompatíveis para ${bucket} do produto #${item.produtoId}.`;
+      }
+    }
+  }
+  return null;
 }
 
 async function carregarFechamentoCargaPorChave(env, chave) {
@@ -4187,6 +4515,81 @@ function fechamentoCargaCompativel(fechamento, cargaId, auditoria) {
   return fechamento?.tipo === "RETORNO_CARGA" && fechamento?.status === "CONFIRMADA"
     && fechamento?.origem_tipo === "CARGA" && Number(fechamento.origem_id) === cargaId
     && JSON.stringify(fechamento.auditoria) === JSON.stringify(auditoria);
+}
+
+async function calcularSaldosConferenciaCarga(env, cargaId) {
+  const carga = await env.DB.prepare(`
+    SELECT id, status, local_carga_id,
+      (SELECT id FROM estoque_locais WHERE tipo='CENTRAL' AND ativo=1 LIMIT 1) AS central_id
+    FROM estoque_cargas WHERE id=?
+  `).bind(cargaId).first();
+  if (!carga) return null;
+
+  const produtos = await env.DB.prepare(`
+    SELECT produto_id FROM estoque_carga_itens WHERE carga_id=?
+    UNION
+    SELECT produto_id FROM estoque_movimentacoes WHERE local_id=?
+    UNION
+    SELECT m.produto_id
+    FROM estoque_pacote_movimentacoes m
+    INNER JOIN estoque_pacote_operacoes o ON o.id=m.operacao_id
+    WHERE COALESCE(m.local_id,m.local_carga_id)=?
+      AND o.status IN('CONFIRMADA','ESTORNADA')
+      AND m.bucket IN('FRACIONADO_NOVO','RETORNO_TROCA','DESCARTE_PENDENTE')
+  `).bind(cargaId, carga.local_carga_id, carga.local_carga_id).all();
+  const ids = (produtos.results || []).map(item => Number(item.produto_id));
+  if (!ids.length) return { carga, produtos: [], bloqueado: false, alertas: [] };
+  const placeholders = ids.map(() => '?').join(',');
+  const [nomes, fardos, pacotes] = await Promise.all([
+    env.DB.prepare(`SELECT id AS produto_id,nome AS produto_nome FROM produtos WHERE id IN(${placeholders})`).bind(...ids).all(),
+    env.DB.prepare(`
+      SELECT produto_id,SUM(quantidade*efeito) AS saldo
+      FROM estoque_movimentacoes WHERE local_id=? AND produto_id IN(${placeholders})
+      GROUP BY produto_id
+    `).bind(carga.local_carga_id, ...ids).all(),
+    env.DB.prepare(`
+      SELECT m.produto_id,m.bucket,SUM(m.quantidade_pacotes*m.efeito) AS saldo
+      FROM estoque_pacote_movimentacoes m
+      INNER JOIN estoque_pacote_operacoes o ON o.id=m.operacao_id
+      WHERE COALESCE(m.local_id,m.local_carga_id)=?
+        AND o.status IN('CONFIRMADA','ESTORNADA')
+        AND m.bucket IN('FRACIONADO_NOVO','RETORNO_TROCA','DESCARTE_PENDENTE')
+        AND m.produto_id IN(${placeholders})
+      GROUP BY m.produto_id,m.bucket
+    `).bind(carga.local_carga_id, ...ids).all(),
+  ]);
+  const nomesPorId = new Map((nomes.results || []).map(item => [Number(item.produto_id), item.produto_nome]));
+  const fardosPorId = new Map((fardos.results || []).map(item => [Number(item.produto_id), Number(item.saldo || 0)]));
+  const pacotesPorChave = new Map((pacotes.results || []).map(item => [`${Number(item.produto_id)}:${item.bucket}`, Number(item.saldo || 0)]));
+  const itensCarga = new Set((await env.DB.prepare("SELECT produto_id FROM estoque_carga_itens WHERE carga_id=?").bind(cargaId).all()).results.map(item => Number(item.produto_id)));
+  const resultado = ids.map(produtoId => ({
+    produto_id: produtoId,
+    produto_nome: nomesPorId.get(produtoId) || `Produto #${produtoId}`,
+    tem_item_carga: itensCarga.has(produtoId),
+    fardos_sistema: fardosPorId.get(produtoId) || 0,
+    pacotes_bons_sistema: pacotesPorChave.get(`${produtoId}:FRACIONADO_NOVO`) || 0,
+    retorno_troca_sistema: pacotesPorChave.get(`${produtoId}:RETORNO_TROCA`) || 0,
+    descarte_pendente: pacotesPorChave.get(`${produtoId}:DESCARTE_PENDENTE`) || 0,
+  })).filter(item => item.fardos_sistema !== 0 || item.pacotes_bons_sistema !== 0
+    || item.retorno_troca_sistema !== 0 || item.descarte_pendente !== 0
+    || ids.includes(item.produto_id));
+  const alertas = resultado.filter(item => item.descarte_pendente !== 0).map(item => ({
+    produto_id: item.produto_id, produto_nome: item.produto_nome,
+    tipo: 'DESCARTE_PENDENTE', quantidade: item.descarte_pendente,
+    local_id: Number(carga.local_carga_id),
+  }));
+  return { carga, local_id: Number(carga.local_carga_id), central_id: Number(carga.central_id || 0), produtos: resultado, bloqueado: alertas.length > 0, alertas };
+}
+
+async function obterConferenciaFechamentoCarga(request, env, user, cargaId) {
+  if (!acessoCargaPermitido(user)) return acessoNegado();
+  if (!Number.isInteger(cargaId) || cargaId <= 0) return json({ error: 'Carga inválida.' }, 400);
+  const fotografia = await calcularSaldosConferenciaCarga(env, cargaId);
+  if (!fotografia) return json({ error: 'Carga não encontrada.' }, 404);
+  if (fotografia.carga.status !== 'ABERTA') return json({ error: 'Somente cargas abertas possuem conferência de fechamento.' }, 409);
+  return json({ carga_id: cargaId, local_id: fotografia.local_id, status: fotografia.carga.status,
+    produtos: fotografia.produtos.map(({ tem_item_carga, ...produto }) => produto),
+    bloqueado: fotografia.bloqueado, alertas: fotografia.alertas });
 }
 
 async function auditarFechamentoCarga(env, cargaId, chave, auditoria) {
@@ -4217,9 +4620,18 @@ async function fecharCargaVendedor(request, env, user, cargaId) {
   const recebidos = Array.isArray(dados.itens) ? dados.itens : [];
   if (!observacao) return json({ error: "Informe a observação de fechamento." }, 400);
   if (!chaveCliente || chaveCliente.length > 120) return json({ error: "Chave de idempotência inválida." }, 400);
-  const itens = recebidos.map(item => ({ produtoId: Number(item?.produto_id || 0), quantidadeFisica: Number(item?.quantidade_fisica) })).sort((a, b) => a.produtoId - b.produtoId);
+  const itens = recebidos.map(item => ({
+    produtoId: Number(item?.produto_id || 0),
+    quantidadeFisica: Number(item?.quantidade_fisica),
+    quantidadePacotesBonsFisica: Number(item?.quantidade_pacotes_bons ?? 0),
+    quantidadeRetornoTrocaFisica: Number(item?.quantidade_retorno_troca ?? 0),
+  })).sort((a, b) => a.produtoId - b.produtoId);
   if (itens.some(item => !Number.isInteger(item.produtoId) || item.produtoId <= 0)) return json({ error: "Todos os produtos devem ser válidos." }, 400);
   if (itens.some(item => !Number.isInteger(item.quantidadeFisica) || item.quantidadeFisica < 0)) return json({ error: "As quantidades físicas devem ser inteiros maiores ou iguais a zero." }, 400);
+  if (itens.some(item => !Number.isInteger(item.quantidadePacotesBonsFisica) || item.quantidadePacotesBonsFisica < 0
+    || !Number.isInteger(item.quantidadeRetornoTrocaFisica) || item.quantidadeRetornoTrocaFisica < 0)) {
+    return json({ error: "As quantidades físicas de pacotes devem ser inteiros maiores ou iguais a zero." }, 400);
+  }
   if (new Set(itens.map(item => item.produtoId)).size !== itens.length) return json({ error: "O mesmo produto não pode aparecer duas vezes." }, 400);
 
   const chave = chaveFechamentoCarga(cargaId, chaveCliente);
@@ -4228,43 +4640,68 @@ async function fecharCargaVendedor(request, env, user, cargaId) {
   if (existente) {
     if (!fechamentoCargaCompativel(existente, cargaId, auditoria)) return json({ error: "A chave de idempotência já foi usada com conteúdo diferente." }, 409);
     const carga = await carregarCargaCompleta(env, cargaId);
-    if (!carga || await auditarFechamentoCarga(env, cargaId, chave, auditoria)) return json({ error: "O fechamento existente está estruturalmente incompleto. Solicite auditoria." }, 409);
+    if (!carga || await auditarFechamentoCarga(env, cargaId, chave, auditoria)
+      || await auditarRetornosPacoteFechamento(env, cargaId, chaveCliente, itens, carga.local_carga_id, (await obterEstoqueCentral(env))?.id)) {
+      return json({ error: "O fechamento existente está estruturalmente incompleto. Solicite auditoria." }, 409);
+    }
     return json({ success: true, idempotente: true, carga });
   }
   if (auditoria.confirmacao_fisica !== true || auditoria.confirmacao_texto !== "FECHAR CARGA") return json({ error: "Confirme a contagem física e digite FECHAR CARGA." }, 400);
 
-  const estado = await env.DB.prepare(`
-    WITH produtos_carga AS (
-      SELECT produto_id FROM estoque_carga_itens WHERE carga_id = ?
-      UNION SELECT produto_id FROM estoque_movimentacoes WHERE local_id = (SELECT local_carga_id FROM estoque_cargas WHERE id = ?)
-    )
-    SELECT carga.id, carga.status, carga.local_carga_id,
-      (SELECT id FROM estoque_locais WHERE tipo = 'CENTRAL' AND ativo = 1) AS central_id,
-      produto.id AS produto_id, produto.nome AS produto_nome,
-      COALESCE((SELECT SUM(quantidade * efeito) FROM estoque_movimentacoes WHERE local_id = carga.local_carga_id AND produto_id = produto.id), 0) AS saldo_atual
-    FROM estoque_cargas carga CROSS JOIN produtos_carga pc
-    INNER JOIN produtos produto ON produto.id = pc.produto_id
-    WHERE carga.id = ? ORDER BY produto.id
-  `).bind(cargaId, cargaId, cargaId).all();
-  const linhas = estado.results || [];
+  const fotografia = await calcularSaldosConferenciaCarga(env, cargaId);
+  const linhas = fotografia.produtos.filter(item => item.tem_item_carga || item.fardos_sistema !== 0).map(item => ({
+    produto_id: item.produto_id, produto_nome: item.produto_nome, saldo_atual: item.fardos_sistema,
+  }));
   const cargaAtual = await env.DB.prepare("SELECT id, status, local_carga_id FROM estoque_cargas WHERE id = ?").bind(cargaId).first();
   if (!cargaAtual) return json({ error: "Carga não encontrada." }, 404);
   if (cargaAtual.status !== "ABERTA") return json({ error: "Somente cargas abertas podem ser fechadas." }, 409);
   const pacotePreparando = await env.DB.prepare("SELECT id FROM estoque_pacote_operacoes WHERE carga_id = ? AND status = 'PREPARANDO' LIMIT 1").bind(cargaId).first();
   if (pacotePreparando) return json({ error: "Existe uma operação por pacote em preparação nesta carga." }, 409);
-  const centralId = Number(linhas[0]?.central_id || (await obterEstoqueCentral(env))?.id || 0);
+  const centralId = Number(fotografia.central_id || (await obterEstoqueCentral(env))?.id || 0);
   if (!centralId) return json({ error: "Estoque Central ativo não encontrado." }, 409);
+  if (fotografia.bloqueado) return json({ error: "Existe material segregado em DESCARTE_PENDENTE nesta carga. Regularize antes do fechamento.", alertas: fotografia.alertas }, 409);
   if (linhas.some(linha => Number(linha.saldo_atual) < 0)) return json({ error: "Há saldo negativo no veículo. Use Conferir saldo antes de fechar." }, 409);
-  if (linhas.length !== itens.length || linhas.some((linha, indice) => Number(linha.produto_id) !== itens[indice].produtoId)) return json({ error: "A conferência deve incluir todos os produtos do saldo operacional. Atualize o detalhe da carga." }, 409);
-  const divergente = linhas.find((linha, indice) => Number(linha.saldo_atual) !== itens[indice].quantidadeFisica);
+  const pacoteLinhas = fotografia.produtos.flatMap(item => [
+    { produto_id: item.produto_id, bucket: 'FRACIONADO_NOVO', saldo: item.pacotes_bons_sistema },
+    { produto_id: item.produto_id, bucket: 'RETORNO_TROCA', saldo: item.retorno_troca_sistema },
+  ]).filter(item => item.saldo !== 0);
+  const produtoIds = fotografia.produtos.map(item => Number(item.produto_id)).sort((a, b) => a - b);
+  if (produtoIds.length !== itens.length || produtoIds.some((produtoId, indice) => produtoId !== itens[indice].produtoId)) return json({ error: "A conferência deve incluir fardos e pacotes de todos os produtos do saldo operacional. Atualize o detalhe da carga." }, 409);
+  const divergente = linhas.find(linha => {
+    const item = itens.find(conferencia => conferencia.produtoId === Number(linha.produto_id));
+    return !item || Number(linha.saldo_atual) !== item.quantidadeFisica;
+  });
   if (divergente) return json({ error: `A quantidade física de ${divergente.produto_nome} difere do saldo sistêmico. Use Conferir saldo antes de fechar.`, produto_id: Number(divergente.produto_id), saldo_atual: Number(divergente.saldo_atual) }, 409);
+  for (const linha of pacoteLinhas) {
+    const item = itens.find(conferencia => conferencia.produtoId === Number(linha.produto_id));
+    const informado = linha.bucket === "FRACIONADO_NOVO" ? item?.quantidadePacotesBonsFisica : item?.quantidadeRetornoTrocaFisica;
+    if (Number(linha.saldo) < 0) return json({ error: `Há saldo negativo de ${linha.bucket} no produto #${linha.produto_id}.` }, 409);
+    if (Number(informado) !== Number(linha.saldo)) return json({ error: `A quantidade física de ${linha.bucket} difere do saldo sistêmico.`, produto_id: Number(linha.produto_id), bucket: linha.bucket, saldo_atual: Number(linha.saldo) }, 409);
+  }
 
-  const ids = itens.length ? itens.map(item => item.produtoId).join(",") : "0";
-  const saldosIguais = itens.map(item => `(EXISTS (SELECT 1 FROM produtos WHERE id = ${item.produtoId}) AND ${item.quantidadeFisica} = (SELECT COALESCE(SUM(quantidade * efeito), 0) FROM estoque_movimentacoes WHERE local_id = carga.local_carga_id AND produto_id = ${item.produtoId}))`).join(" AND ") || "1 = 1";
-  const conjuntoExato = `(SELECT COUNT(*) FROM (SELECT produto_id FROM estoque_carga_itens WHERE carga_id = carga.id UNION SELECT produto_id FROM estoque_movimentacoes WHERE local_id = carga.local_carga_id)) = ${itens.length}
+  const itensFardos = itens.filter(item => linhas.some(linha => Number(linha.produto_id) === item.produtoId));
+  const ids = itensFardos.length ? itensFardos.map(item => item.produtoId).join(",") : "0";
+  const saldosIguais = itensFardos.map(item => `(EXISTS (SELECT 1 FROM produtos WHERE id = ${item.produtoId}) AND ${item.quantidadeFisica} = (SELECT COALESCE(SUM(quantidade * efeito), 0) FROM estoque_movimentacoes WHERE local_id = carga.local_carga_id AND produto_id = ${item.produtoId}))`).join(" AND ") || "1 = 1";
+  const conjuntoExato = `(SELECT COUNT(*) FROM (SELECT produto_id FROM estoque_carga_itens WHERE carga_id = carga.id UNION SELECT produto_id FROM estoque_movimentacoes WHERE local_id = carga.local_carga_id)) = ${itensFardos.length}
     AND NOT EXISTS (SELECT 1 FROM (SELECT produto_id FROM estoque_carga_itens WHERE carga_id = carga.id UNION SELECT produto_id FROM estoque_movimentacoes WHERE local_id = carga.local_carga_id) WHERE produto_id NOT IN (${ids}))`;
   const observacaoAuditoria = `FECHAMENTO_CARGA:${JSON.stringify(auditoria)}`;
-  const statements = [env.DB.prepare(`
+  const statements = [];
+  for (const item of itens) {
+    for (const [bucket, quantidade] of [["FRACIONADO_NOVO", item.quantidadePacotesBonsFisica], ["RETORNO_TROCA", item.quantidadeRetornoTrocaFisica]]) {
+      if (quantidade <= 0) continue;
+      const chavePacote = `RETORNO_CARGA_PACOTE:${cargaId}:${item.produtoId}:${bucket}:${chaveCliente}`;
+      const hashPacote = await hashTexto(JSON.stringify({ tipo: "RETORNO_CARGA_PACOTE", carga_id: cargaId, produto_id: item.produtoId, bucket, quantidade, chaveCliente }));
+      statements.push(env.DB.prepare(`INSERT INTO estoque_pacote_operacoes(tipo,status,carga_id,local_carga_id,vendedor_id,produto_id,quantidade_pacotes,observacao,chave_idempotencia,idempotencia_hash,usuario_id,data_operacao)
+        SELECT 'RETORNO_CARGA_PACOTE','PREPARANDO',id,local_carga_id,vendedor_id,?,?,?,?,?,?,? FROM estoque_cargas
+        WHERE id=? AND status='ABERTA' AND NOT EXISTS(SELECT 1 FROM estoque_pacote_operacoes WHERE chave_idempotencia=?)`).bind(item.produtoId,quantidade,`RETORNO_CARGA_PACOTE:${cargaId}:${item.produtoId}:${bucket}`,chavePacote,hashPacote,user.vendedorId,obterDataLocalCuiaba(),cargaId,chavePacote));
+      statements.push(env.DB.prepare(`INSERT INTO estoque_pacote_movimentacoes(operacao_id,carga_id,local_carga_id,local_id,produto_id,bucket,quantidade_pacotes,efeito)
+        SELECT id,carga_id,local_carga_id,local_carga_id,produto_id,?,?,? FROM estoque_pacote_operacoes WHERE chave_idempotencia=? AND status='PREPARANDO'`).bind(bucket,quantidade,-1,chavePacote));
+      statements.push(env.DB.prepare(`INSERT INTO estoque_pacote_movimentacoes(operacao_id,carga_id,local_carga_id,local_id,produto_id,bucket,quantidade_pacotes,efeito)
+        SELECT o.id,o.carga_id,o.local_carga_id,central.id,o.produto_id,?,?,? FROM estoque_pacote_operacoes o INNER JOIN estoque_locais central ON central.id=? AND central.tipo='CENTRAL' AND central.ativo=1 WHERE o.chave_idempotencia=? AND o.status='PREPARANDO'`).bind(bucket,quantidade,1,centralId,chavePacote));
+      statements.push(env.DB.prepare("UPDATE estoque_pacote_operacoes SET status='CONFIRMADA',confirmado_em=CURRENT_TIMESTAMP WHERE chave_idempotencia=? AND status='PREPARANDO'").bind(chavePacote));
+    }
+  }
+  statements.push(env.DB.prepare(`
     INSERT INTO estoque_operacoes (tipo, status, data_operacao, origem_tipo, origem_id, chave_idempotencia, operacao_estornada_id, usuario_id, observacao, created_at)
     SELECT 'RETORNO_CARGA', 'CONFIRMADA', ?, 'CARGA', carga.id, ?, NULL, ?, ?, CURRENT_TIMESTAMP
     FROM estoque_cargas carga
@@ -4273,7 +4710,7 @@ async function fecharCargaVendedor(request, env, user, cargaId) {
       AND NOT EXISTS (SELECT 1 FROM estoque_pacote_operacoes pacote WHERE pacote.carga_id = carga.id AND pacote.status = 'PREPARANDO')
       AND NOT EXISTS (SELECT 1 FROM estoque_operacoes WHERE chave_idempotencia = ?)
       AND ${conjuntoExato} AND ${saldosIguais}
-  `).bind(obterDataLocalCuiaba(), chave, user.vendedorId, observacaoAuditoria, cargaId, cargaAtual.local_carga_id, centralId, chave)];
+  `).bind(obterDataLocalCuiaba(), chave, user.vendedorId, observacaoAuditoria, cargaId, cargaAtual.local_carga_id, centralId, chave));
   for (const item of itens.filter(item => item.quantidadeFisica > 0)) {
     for (const [localId, efeito] of [[Number(cargaAtual.local_carga_id), -1], [centralId, 1]]) statements.push(env.DB.prepare(`
       INSERT INTO estoque_movimentacoes (operacao_id, local_id, produto_id, carga_id, carga_item_id, visita_id, visita_item_id, quantidade, efeito, created_at)
@@ -4308,7 +4745,8 @@ async function fecharCargaVendedor(request, env, user, cargaId) {
     return json({ error: "O estado da carga ou algum saldo mudou. Atualize o detalhe e confira novamente." }, 409);
   }
   const carga = await carregarCargaCompleta(env, cargaId);
-  const falhaAuditoria = await auditarFechamentoCarga(env, cargaId, chave, auditoria);
+  const falhaAuditoria = await auditarFechamentoCarga(env, cargaId, chave, auditoria)
+    || await auditarRetornosPacoteFechamento(env, cargaId, chaveCliente, itens, cargaAtual.local_carga_id, centralId);
   if (!carga || falhaAuditoria) throw new Error(`Fechamento não confirmado após a transação: ${falhaAuditoria || "carga não encontrada"}`);
   return json({ success: true, idempotente: false, carga }, 201);
 }
@@ -4351,7 +4789,7 @@ async function operacaoPacotePorChave(env, chave) {
     (SELECT status FROM estoque_pacote_operacoes original WHERE original.id=estoque_pacote_operacoes.operacao_estornada_id) AS operacao_estornada_status
     FROM estoque_pacote_operacoes WHERE chave_idempotencia=?`).bind(chave).first();
   if (!operacao) return null;
-  const movimentos = await env.DB.prepare(`SELECT id,bucket,quantidade_pacotes,efeito,created_at
+  const movimentos = await env.DB.prepare(`SELECT id,local_id,local_carga_id,bucket,quantidade_pacotes,efeito,created_at
     FROM estoque_pacote_movimentacoes WHERE operacao_id=? ORDER BY id`).bind(operacao.id).all();
   return { ...operacao, movimentos: movimentos.results || [] };
 }
@@ -4411,7 +4849,7 @@ function operacaoPacoteCompleta(operacao) {
     && Number(item.efeito) === efeito && Number(item.quantidade_pacotes) === Number(operacao.quantidade_pacotes));
   if (operacao.tipo === "ABERTURA_FARDO") return movimentos.length === 1 && movimento("FRACIONADO_NOVO", 1);
   if (operacao.tipo === "TROCA") return movimentos.length === 2
-    && movimento("FRACIONADO_NOVO", -1) && movimento("DESCARTE_PENDENTE", 1);
+    && movimento("FRACIONADO_NOVO", -1) && movimento("RETORNO_TROCA", 1);
   if (["DEGUSTACAO", "BONIFICACAO_PACOTE"].includes(operacao.tipo)) {
     return movimentos.length === 1 && movimento("FRACIONADO_NOVO", -1);
   }
@@ -4442,7 +4880,7 @@ async function executarPacoteIdempotente(env, chaveInterna, chaveCliente, hash, 
     if (Object.keys(retornos).length && /visita nao esta ativa/i.test(normalizeText(err?.message))) {
       return respostaConflitoIdempotencia(chaveCliente, "A visita deixou de estar ativa antes da confirmação.");
     }
-    return respostaIndeterminadaIdempotencia(chaveCliente);
+    return respostaErroPacote(err, chaveCliente);
   }
   if (!resultadosBatchValidos(resultados, statements.length, retornos)) {
     let recuperada;
@@ -4546,12 +4984,12 @@ async function executarAberturaFardoIdempotente(env, esperado, chaveCliente, sta
   return finalizarAberturaFardo(env, esperado, chaveCliente, resultados, statements.length);
 }
 
-function movimentoPacoteStmt(env, chave, bucket, quantidade, efeito) {
+function movimentoPacoteStmt(env, chave, bucket, quantidade, efeito, localId = null) {
   return env.DB.prepare(`INSERT INTO estoque_pacote_movimentacoes
-    (operacao_id,carga_id,local_carga_id,produto_id,bucket,quantidade_pacotes,efeito,created_at)
-    SELECT id,carga_id,local_carga_id,produto_id,?,?,?,CURRENT_TIMESTAMP
+    (operacao_id,carga_id,local_carga_id,local_id,produto_id,bucket,quantidade_pacotes,efeito,created_at)
+    SELECT id,carga_id,local_carga_id,COALESCE(?,local_carga_id),produto_id,?,?,?,CURRENT_TIMESTAMP
     FROM estoque_pacote_operacoes WHERE chave_idempotencia=? AND status='PREPARANDO'`)
-    .bind(bucket, quantidade, efeito, chave);
+    .bind(localId, bucket, quantidade, efeito, chave);
 }
 
 function confirmarPacoteStmt(env, chave) {
@@ -4574,13 +5012,14 @@ async function minhaCarga(env, user) {
     env.DB.prepare(`SELECT p.id produto_id,p.nome produto_nome,p.pacotes_por_fardo,
       EXISTS(SELECT 1 FROM estoque_carga_itens ci_atual WHERE ci_atual.carga_id=c.id AND ci_atual.produto_id=p.id) AS participa_carga_atual,
       COALESCE((SELECT SUM(m.quantidade*m.efeito) FROM estoque_movimentacoes m WHERE m.local_id=c.local_carga_id AND m.produto_id=p.id),0) AS fardos_fechados,
-      COALESCE((SELECT SUM(pm.quantidade_pacotes*pm.efeito) FROM estoque_pacote_movimentacoes pm JOIN estoque_pacote_operacoes po ON po.id=pm.operacao_id WHERE po.status IN('CONFIRMADA','ESTORNADA') AND pm.local_carga_id=c.local_carga_id AND pm.produto_id=p.id AND pm.bucket='FRACIONADO_NOVO'),0) AS fracionado_novo,
-      COALESCE((SELECT SUM(pm.quantidade_pacotes*pm.efeito) FROM estoque_pacote_movimentacoes pm JOIN estoque_pacote_operacoes po ON po.id=pm.operacao_id WHERE po.status IN('CONFIRMADA','ESTORNADA') AND pm.local_carga_id=c.local_carga_id AND pm.produto_id=p.id AND pm.bucket='DESCARTE_PENDENTE'),0) AS descarte_pendente
+      COALESCE((SELECT SUM(pm.quantidade_pacotes*pm.efeito) FROM estoque_pacote_movimentacoes pm JOIN estoque_pacote_operacoes po ON po.id=pm.operacao_id WHERE po.status IN('CONFIRMADA','ESTORNADA') AND COALESCE(pm.local_id,pm.local_carga_id)=c.local_carga_id AND pm.produto_id=p.id AND pm.bucket='FRACIONADO_NOVO'),0) AS fracionado_novo,
+      COALESCE((SELECT SUM(pm.quantidade_pacotes*pm.efeito) FROM estoque_pacote_movimentacoes pm JOIN estoque_pacote_operacoes po ON po.id=pm.operacao_id WHERE po.status IN('CONFIRMADA','ESTORNADA') AND COALESCE(pm.local_id,pm.local_carga_id)=c.local_carga_id AND pm.produto_id=p.id AND pm.bucket='RETORNO_TROCA'),0) AS retorno_troca,
+      COALESCE((SELECT SUM(pm.quantidade_pacotes*pm.efeito) FROM estoque_pacote_movimentacoes pm JOIN estoque_pacote_operacoes po ON po.id=pm.operacao_id WHERE po.status IN('CONFIRMADA','ESTORNADA') AND COALESCE(pm.local_id,pm.local_carga_id)=c.local_carga_id AND pm.produto_id=p.id AND pm.bucket='DESCARTE_PENDENTE'),0) AS descarte_pendente
       FROM (SELECT produto_id FROM estoque_carga_itens WHERE carga_id=?
         UNION
         SELECT pm.produto_id FROM estoque_pacote_movimentacoes pm
         JOIN estoque_pacote_operacoes po ON po.id=pm.operacao_id
-        WHERE pm.local_carga_id=? AND po.status IN('CONFIRMADA','ESTORNADA')) pl
+        WHERE COALESCE(pm.local_id,pm.local_carga_id)=? AND po.status IN('CONFIRMADA','ESTORNADA')) pl
       JOIN produtos p ON p.id=pl.produto_id CROSS JOIN estoque_cargas c
       WHERE c.id=? GROUP BY p.id ORDER BY p.nome`).bind(carga.id,carga.local_carga_id,carga.id).all(),
     env.DB.prepare(`SELECT id,status,visita_id,produto_id,quantidade_fardos,motivo,solicitada_em,decidida_em
@@ -4602,18 +5041,18 @@ async function saldoPacotes(request, env, user, proprio = false) {
   if (proprio && !carga) return json({ saldos: [] });
   const filtros = ["o.status IN('CONFIRMADA','ESTORNADA')"];
   const parametros = [];
-  if (proprio) { filtros.push("m.local_carga_id=?"); parametros.push(carga.local_carga_id); }
+  if (proprio) { filtros.push("COALESCE(m.local_id,m.local_carga_id)=?"); parametros.push(carga.local_carga_id); }
   else {
-    for (const [nome, coluna] of [["local_carga_id","m.local_carga_id"],["vendedor_id","l.vendedor_id"],["produto_id","m.produto_id"]]) {
+    for (const [nome, coluna] of [["local_carga_id","COALESCE(m.local_id,m.local_carga_id)"],["vendedor_id","l.vendedor_id"],["produto_id","m.produto_id"]]) {
       const parametro = inteiroQueryOpcional(url,nome); if(parametro.erro)return json({error:`${nome} deve ser inteiro positivo.`},400);
       if (parametro.presente) { filtros.push(`${coluna}=?`); parametros.push(parametro.valor); }
     }
   }
-  const resultado = await env.DB.prepare(`SELECT m.local_carga_id,MAX(l.vendedor_id) vendedor_id,m.produto_id,p.nome produto_nome,m.bucket,
+  const resultado = await env.DB.prepare(`SELECT COALESCE(m.local_id,m.local_carga_id) local_id,m.local_carga_id,MAX(l.vendedor_id) vendedor_id,m.produto_id,p.nome produto_nome,m.bucket,
     SUM(m.quantidade_pacotes*m.efeito) saldo FROM estoque_pacote_movimentacoes m
     JOIN estoque_pacote_operacoes o ON o.id=m.operacao_id JOIN produtos p ON p.id=m.produto_id
-    JOIN estoque_locais l ON l.id=m.local_carga_id
-    WHERE ${filtros.join(" AND ")} GROUP BY m.local_carga_id,m.produto_id,m.bucket ORDER BY m.local_carga_id,m.produto_id,m.bucket`)
+    JOIN estoque_locais l ON l.id=COALESCE(m.local_id,m.local_carga_id)
+    WHERE ${filtros.join(" AND ")} GROUP BY COALESCE(m.local_id,m.local_carga_id),m.produto_id,m.bucket ORDER BY COALESCE(m.local_id,m.local_carga_id),m.produto_id,m.bucket`)
     .bind(...parametros).all();
   return json({ saldos: resultado.results || [] });
 }
@@ -4691,7 +5130,7 @@ async function operacaoComercialPacote(request, env, user, visitaId, tipo) {
     WHERE c.id=? AND c.status='ABERTA' AND c.vendedor_id=? AND c.local_carga_id=? RETURNING id`)
     .bind(tipo,produtoId,quantidade,visitaId,visita.cliente_id||null,visita.cliente_avulso_id||null,catalogo?motivo:null,observacao||null,chave,hash,user.vendedorId,data,produtoId,visitaId,visita.cliente_id||0,visita.cliente_avulso_id||0,carga.id,user.vendedorId,carga.local_carga_id)];
   statements.push(movimentoPacoteStmt(env,chave,"FRACIONADO_NOVO",quantidade,-1));
-  if(tipo==="TROCA")statements.push(movimentoPacoteStmt(env,chave,"DESCARTE_PENDENTE",quantidade,1));
+  if(tipo==="TROCA")statements.push(movimentoPacoteStmt(env,chave,"RETORNO_TROCA",quantidade,1));
   statements.push(confirmarPacoteStmt(env,chave));
   const resposta=await executarPacoteIdempotente(env,chave,chaveCliente,hash,statements,{0:{linhas:1,idInteiroPositivo:true}});
   if(resposta.status===409&&tipo!=="TROCA")return resposta;
@@ -5050,6 +5489,7 @@ async function debugClientes(request, env, user) {
   });
 }
 
+export { historicoComercialCliente };
 
 export default {
   async fetch(request, env) {
@@ -5089,6 +5529,10 @@ if (url.pathname.startsWith("/api/vendedores/") && request.method === "PUT") {
 
     if (url.pathname === "/api/debug-clientes" && request.method === "GET") return debugClientes(request, env, user);
     if (url.pathname === "/api/clientes" && request.method === "GET") return listarClientes(env, user);
+    if (/^\/api\/clientes\/(formal|avulso)\/\d+\/historico-comercial$/.test(url.pathname) && request.method === "GET") {
+      const partes = url.pathname.split("/");
+      return historicoComercialCliente(request, env, user, partes[3], Number(partes[4]));
+    }
     if (/^\/api\/clientes\/\d+$/.test(url.pathname) && request.method === "GET") {
       return obterClientePorId(env, Number(url.pathname.split("/").pop()));
     }
@@ -5121,6 +5565,9 @@ if (url.pathname === "/api/sync" && request.method === "POST") {
     }
     if (url.pathname === "/api/producao/receitas-base" && request.method === "GET") return listarReceitasBaseProducao(request, env, user);
     if (url.pathname === "/api/producao/lotes/abertura" && request.method === "POST") return await abrirLoteProducaoV11(request, env, user);
+    if (/^\/api\/producao\/lotes\/\d+\/vinculos\/\d+\/retirar$/.test(url.pathname) && request.method === "POST") {
+      return await retirarProdutoLoteV11(request, env, user, Number(url.pathname.split("/")[4]), Number(url.pathname.split("/")[6]));
+    }
     if (/^\/api\/producao\/lotes\/\d+\/produtos$/.test(url.pathname) && request.method === "POST") {
       return await incluirProdutoLoteV11(request, env, user, Number(url.pathname.split("/")[4]));
     }
@@ -5173,6 +5620,9 @@ if (url.pathname === "/api/sync" && request.method === "POST") {
     }
     if (/^\/api\/estoque\/cargas\/\d+\/conferencia$/.test(url.pathname) && request.method === "POST") {
       return registrarConferenciaCarga(request, env, user, Number(url.pathname.split("/")[4]));
+    }
+    if (/^\/api\/estoque\/cargas\/\d+\/conferencia-fechamento$/.test(url.pathname) && request.method === "GET") {
+      return obterConferenciaFechamentoCarga(request, env, user, Number(url.pathname.split("/")[4]));
     }
     if (/^\/api\/estoque\/cargas\/\d+\/fechamento$/.test(url.pathname) && request.method === "POST") {
       return fecharCargaVendedor(request, env, user, Number(url.pathname.split("/")[4]));
