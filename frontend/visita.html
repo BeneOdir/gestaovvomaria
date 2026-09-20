@@ -242,7 +242,9 @@
       text-align:center
     }
     .pagamento-linha{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;margin-bottom:9px}
-    .pagamento-linha .remove-item{margin-bottom:2px}
+    .pagamento-prazo{grid-column:1 / 3;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+    .pagamento-prazo[hidden]{display:none}
+    .pagamento-linha .remover-pagamento{grid-column:3;grid-row:1;margin-bottom:2px}
     .pagamento-resumo{line-height:1.7;text-align:left}
     .consulta-estoque{margin:16px 0;border:1px solid #FED7AA;border-radius:18px;background:#FFFBEB;padding:12px}
     .consulta-estoque summary{cursor:pointer;font-weight:900;color:#78350F;padding:4px}
@@ -253,6 +255,8 @@
       body{padding:10px}
       .container{padding:16px;border-radius:22px}
       .grid2,.actions,.pagamento-linha{grid-template-columns:1fr}
+      .pagamento-prazo{grid-column:auto;grid-template-columns:1fr}
+      .pagamento-linha .remover-pagamento{grid-column:auto;grid-row:auto}
       .top{flex-direction:column;text-align:center}
       .logo{width:120px;height:120px}
       .btn{padding:15px}
@@ -1252,8 +1256,20 @@ function coletarItens(){
 function adicionarPagamento(forma="dinheiro", valor=0){
   const linha=document.createElement("div");
   linha.className="pagamento-linha";
-  linha.innerHTML=`<label>Forma<select class="pagamento-forma"><option value="dinheiro">Dinheiro</option><option value="pix">Pix</option><option value="cartao">Cartão</option><option value="prazo">Prazo</option></select></label><label>Valor<input class="pagamento-valor" type="text" inputmode="decimal" value="${formatarMoedaBR(valor)}"></label><button class="remove-item remover-pagamento" type="button">Remover</button>`;
-  linha.querySelector(".pagamento-forma").value=forma;
+  linha.innerHTML=`<label>Forma<select class="pagamento-forma"><option value="dinheiro">Dinheiro</option><option value="pix">Pix</option><option value="cartao">Cartão</option><option value="prazo">Prazo</option></select></label><label>Valor<input class="pagamento-valor" type="text" inputmode="decimal" value="${formatarMoedaBR(valor)}"></label><div class="pagamento-prazo" hidden><label>Modalidade<select class="pagamento-modalidade"><option value="fiado">Fiado/Anotado</option><option value="boleto">Boleto</option></select></label><label>Vencimento<input class="pagamento-vencimento" type="date"></label></div><button class="remove-item remover-pagamento" type="button">Remover</button>`;
+  const selectForma=linha.querySelector(".pagamento-forma");
+  const blocoPrazo=linha.querySelector(".pagamento-prazo");
+  function atualizarVisibilidadePrazo(){
+    const ehPrazo=selectForma.value==="prazo";
+    blocoPrazo.hidden=!ehPrazo;
+    if(!ehPrazo){
+      linha.querySelector(".pagamento-modalidade").value="fiado";
+      linha.querySelector(".pagamento-vencimento").value="";
+    }
+  }
+  selectForma.value=forma;
+  atualizarVisibilidadePrazo();
+  selectForma.addEventListener("change", atualizarVisibilidadePrazo);
   linha.querySelectorAll("select,input").forEach(campo=>campo.addEventListener("input",atualizarTotal));
   aplicarMascaraMoeda(linha.querySelector(".pagamento-valor"));
   linha.querySelector(".remover-pagamento").onclick=()=>{linha.remove();atualizarTotal()};
@@ -1261,7 +1277,7 @@ function adicionarPagamento(forma="dinheiro", valor=0){
   atualizarTotal();
 }
 
-function coletarPagamentos(){return [...document.querySelectorAll(".pagamento-linha")].map(linha=>({forma:linha.querySelector(".pagamento-forma").value,valor:parseMoedaBR(linha.querySelector(".pagamento-valor").value)}))}
+function coletarPagamentos(){return [...document.querySelectorAll(".pagamento-linha")].map(linha=>{const forma=linha.querySelector(".pagamento-forma").value,valor=parseMoedaBR(linha.querySelector(".pagamento-valor").value);return forma==="prazo"?{forma,valor,modalidade:linha.querySelector(".pagamento-modalidade").value,vencimento:linha.querySelector(".pagamento-vencimento").value}:{forma,valor}})}
 
 function totalLiquidoAtual(){const subtotal=coletarItens().reduce((soma,item)=>soma+(item.quantidade*item.preco_unitario),0);const desconto=parseMoedaBR(document.getElementById("desconto").value);return Math.max(0,subtotal-(Number.isFinite(desconto)?desconto:0))}
 
@@ -1438,6 +1454,7 @@ document.getElementById("visitaForm").addEventListener("submit", async event => 
   const situacao=document.getElementById("situacao_pagamento").value;
   if(comprou==="sim"&&!pagamentos.length){setStatus("Informe ao menos uma forma de pagamento.","err");return}
   if(pagamentos.some(p=>!Number.isFinite(p.valor)||p.valor<0)){setStatus("Informe valores de pagamento válidos e não negativos.","err");return}
+  if(pagamentos.some(p=>p.forma==="prazo"&&(!["fiado","boleto"].includes(p.modalidade)||!p.vencimento))){setStatus("Informe modalidade e vencimento para o pagamento a prazo.","err");return}
   if(new Set(formas).size!==formas.length){setStatus("Não repita a mesma forma de pagamento.","err");return}
   if(totalPagamentos>totalVenda+0.005){setStatus("A soma dos pagamentos não pode superar o total da venda.","err");return}
   if(totalPagamentos<totalVenda-0.005&&!formas.includes("prazo")&&!['parcial','pendente'].includes(situacao)){setStatus("A diferença exige pagamento em prazo ou situação parcial/pendente.","err");return}
